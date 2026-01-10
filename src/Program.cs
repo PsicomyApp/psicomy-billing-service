@@ -1,3 +1,4 @@
+using Amazon.S3;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Psicomy.Services.Billing.Data;
@@ -46,6 +47,21 @@ try
 
     // JWT Authentication
     builder.Services.AddJwtAuthentication(builder.Configuration);
+
+    // Storage (MinIO/S3)
+    var storageSettings = builder.Configuration.GetSection("Storage").Get<StorageSettings>() ?? new StorageSettings();
+    builder.Services.Configure<StorageSettings>(builder.Configuration.GetSection("Storage"));
+    builder.Services.AddSingleton<IAmazonS3>(sp =>
+    {
+        var config = new AmazonS3Config
+        {
+            ServiceURL = storageSettings.Endpoint,
+            ForcePathStyle = true,
+            UseHttp = !storageSettings.UseSSL
+        };
+        return new AmazonS3Client(storageSettings.AccessKey, storageSettings.SecretKey, config);
+    });
+    builder.Services.AddScoped<IStorageService, S3StorageService>();
 
     // CORS
     builder.Services.AddCors(options =>

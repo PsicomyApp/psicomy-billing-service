@@ -12,6 +12,7 @@ public class BillingDbContext : DbContext
     public DbSet<TenantLicense> TenantLicenses => Set<TenantLicense>();
     public DbSet<PaymentPlan> PaymentPlans => Set<PaymentPlan>();
     public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
+    public DbSet<StudentVerification> StudentVerifications => Set<StudentVerification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -53,6 +54,28 @@ public class BillingDbContext : DbContext
             builder.HasOne(e => e.License)
                 .WithMany()
                 .HasForeignKey(e => e.LicenseId);
+        });
+
+        modelBuilder.Entity<StudentVerification>(builder =>
+        {
+            builder.ToTable("StudentVerifications");
+            builder.HasKey(e => e.Id);
+            builder.HasIndex(e => e.TenantId);
+            builder.HasIndex(e => e.UserId);
+            builder.HasIndex(e => e.Email);
+            builder.HasIndex(e => new { e.UserId, e.Status });
+            builder.HasIndex(e => new { e.UserId, e.CreatedAt });
+            builder.Property(e => e.FullName).HasMaxLength(200);
+            builder.Property(e => e.Email).HasMaxLength(200);
+            builder.Property(e => e.Phone).HasMaxLength(50);
+            builder.Property(e => e.InstitutionName).HasMaxLength(300);
+            builder.Property(e => e.CourseName).HasMaxLength(200);
+            builder.Property(e => e.DocumentFileName).HasMaxLength(500);
+            builder.Property(e => e.DocumentStoragePath).HasMaxLength(1000);
+            builder.Property(e => e.DocumentContentType).HasMaxLength(100);
+            builder.Property(e => e.Status).HasMaxLength(20);
+            builder.Property(e => e.RejectionReason).HasMaxLength(1000);
+            builder.Property(e => e.ReviewedBy).HasMaxLength(200);
         });
 
         // Seed default payment plans
