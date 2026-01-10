@@ -161,8 +161,8 @@ public class StripeWebhookController : ControllerBase
             license.LastPaymentDate = DateTime.UtcNow;
             license.UpdatedAt = DateTime.UtcNow;
 
-            if (invoice.PeriodEnd.HasValue)
-                license.ExpiresAt = invoice.PeriodEnd.Value.AddDays(3);
+            if (invoice.PeriodEnd != default)
+                license.ExpiresAt = invoice.PeriodEnd.AddDays(3);
 
             // Create invoice record
             var paymentInvoice = new Models.PaymentInvoice
@@ -248,8 +248,8 @@ public class StripeWebhookController : ControllerBase
                 _ => license.Status
             };
 
-            if (subscription.CurrentPeriodEnd.HasValue)
-                license.ExpiresAt = subscription.CurrentPeriodEnd.Value.AddDays(3);
+            if (subscription.CurrentPeriodEnd != default)
+                license.ExpiresAt = subscription.CurrentPeriodEnd.AddDays(3);
 
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();

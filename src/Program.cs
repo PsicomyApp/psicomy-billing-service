@@ -34,7 +34,8 @@ try
     builder.Services.AddHttpContextAccessor();
 
     // Database
-    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    var connectionString = builder.Configuration.GetConnectionString("BillingDb")
+        ?? builder.Configuration.GetConnectionString("DefaultConnection")
         ?? Environment.GetEnvironmentVariable("DATABASE_CONNECTION_STRING");
 
     builder.Services.AddDbContext<BillingDbContext>(options =>
