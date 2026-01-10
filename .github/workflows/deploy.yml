@@ -1,0 +1,97 @@
+name: Build and Deploy Billing Service
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: psicomyapp/psicomy-billing-service
+  SERVICE_NAME: billing-service
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src
+          file: ./src/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.NUGET_AUTH_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to Backend Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.BACKEND_DO_HOST }}
+          username: ${{ secrets.BACKEND_DO_USERNAME }}
+          key: ${{ secrets.BACKEND_DO_SSH_KEY }}
+          port: 22
+          script: |
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull ghcr.io/psicomyapp/psicomy-billing-service:latest
+            cd /opt/psicomy/prd
+            docker-compose up -d billing-service
+            docker image prune -af --filter "until=168h"
+
+      - name: Health Check
+        run: |
+          sleep 30
+          curl -f http://${{ secrets.BACKEND_DO_HOST }}:8086/health/live || echo "Service starting..."
+
+  notify:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    if: always() && github.event_name != 'pull_request'
+
+    steps:
+      - name: Notify Result
+        run: |
+          if [ "${{ needs.deploy.result }}" = "success" ]; then
+            echo "Billing Service deployed successfully"
+          else
+            echo "Billing Service deployment failed"
+          fi
