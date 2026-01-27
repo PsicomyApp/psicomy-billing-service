@@ -82,8 +82,22 @@ jobs:
           sleep 30
           curl -f http://${{ secrets.BACKEND_DO_HOST }}:8086/health/live || echo "Service starting..."
 
-  notify:
+  trigger-prd-deploy:
     needs: [build, deploy]
+    runs-on: ubuntu-latest
+    if: needs.deploy.result == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Trigger PRD Deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DISPATCH_TOKEN }}
+          repository: PsicomyApp/psicomy-infrastructure
+          event-type: deploy-prd
+          client-payload: '{"service": "billing-service", "sha": "${{ github.sha }}"}'
+
+  notify:
+    needs: [build, deploy, trigger-prd-deploy]
     runs-on: ubuntu-latest
     if: always() && github.event_name != 'pull_request'
 
@@ -91,7 +105,7 @@ jobs:
       - name: Notify Result
         run: |
           if [ "${{ needs.deploy.result }}" = "success" ]; then
-            echo "Billing Service deployed successfully"
+            echo "✅ Billing Service deployed successfully"
           else
-            echo "Billing Service deployment failed"
+            echo "❌ Billing Service deployment failed"
           fi
