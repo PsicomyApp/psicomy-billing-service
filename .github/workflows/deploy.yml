@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_prd:
+        description: 'Deploy directly to PRD (skip HML)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -40,8 +46,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
             type=sha,prefix=
+            type=raw,value=hml-latest,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
@@ -57,55 +63,102 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  deploy-hml:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !inputs.deploy_prd
+    environment: hml
 
     steps:
-      - name: Deploy to Backend Server
+      - name: Deploy to HML Server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.BACKEND_DO_HOST }}
-          username: ${{ secrets.BACKEND_DO_USERNAME }}
-          key: ${{ secrets.BACKEND_DO_SSH_KEY }}
+          host: ${{ secrets.HML_SSH_HOST }}
+          username: ${{ secrets.HML_SSH_USERNAME }}
+          key: ${{ secrets.HML_SSH_KEY }}
           port: 22
           script: |
+            set -e
+            echo "🚀 Deploying billing-service to HML..."
+
+            # Login to GitHub Container Registry
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ghcr.io/psicomyapp/psicomy-billing-service:latest
-            cd /opt/psicomy/prd
-            docker-compose up -d billing-service
+
+            # Pull the HML image
+            docker pull ghcr.io/psicomyapp/psicomy-billing-service:hml-latest
+
+            # Navigate to HML directory
+            cd /opt/psicomy/hml
+
+            # Update service via docker-compose
+            docker compose pull billing-service
+            docker compose up -d --no-deps --force-recreate billing-service
+
+            # Cleanup old images
             docker image prune -af --filter "until=168h"
 
-      - name: Health Check
-        run: |
-          sleep 30
-          curl -f http://${{ secrets.BACKEND_DO_HOST }}:8086/health/live || echo "Service starting..."
+            echo "✅ billing-service deployed to HML"
 
-  trigger-prd-deploy:
-    needs: [build, deploy]
+      - name: Health Check HML
+        run: |
+          echo "⏳ Waiting for service to start..."
+          sleep 30
+          curl -sf https://backend-hml.psicomy.com.br/api/billing/health || echo "⚠️ Service starting..."
+
+  deploy-prd:
+    needs: [build, deploy-hml]
     runs-on: ubuntu-latest
-    if: needs.deploy.result == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: always() && needs.build.result == 'success' && (needs.deploy-hml.result == 'success' || needs.deploy-hml.result == 'skipped')
+    environment: prd
 
     steps:
-      - name: Trigger PRD Deploy
-        uses: peter-evans/repository-dispatch@v3
+      - name: Deploy to PRD Server
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: PsicomyApp/psicomy-infrastructure
-          event-type: deploy-prd
-          client-payload: '{"service": "billing-service", "sha": "${{ github.sha }}"}'
+          host: ${{ secrets.PRD_SSH_HOST }}
+          username: ${{ secrets.PRD_SSH_USERNAME }}
+          key: ${{ secrets.PRD_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "🚀 Deploying billing-service to PRD..."
+
+            # Login to GitHub Container Registry
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Pull the latest image
+            docker pull ghcr.io/psicomyapp/psicomy-billing-service:latest
+
+            # Navigate to PRD directory
+            cd /opt/psicomy/prd
+
+            # Update service via docker-compose
+            docker compose pull billing-service
+            docker compose up -d --no-deps --force-recreate billing-service
+
+            # Cleanup old images
+            docker image prune -af --filter "until=168h"
+
+            echo "✅ billing-service deployed to PRD"
+
+      - name: Health Check PRD
+        run: |
+          echo "⏳ Waiting for service to start..."
+          sleep 30
+          curl -sf https://backend.psicomy.com.br/api/billing/health || echo "⚠️ Service starting..."
 
   notify:
-    needs: [build, deploy, trigger-prd-deploy]
+    needs: [build, deploy-hml, deploy-prd]
     runs-on: ubuntu-latest
     if: always() && github.event_name != 'pull_request'
 
     steps:
-      - name: Notify Result
+      - name: Summary
         run: |
-          if [ "${{ needs.deploy.result }}" = "success" ]; then
-            echo "✅ Billing Service deployed successfully"
-          else
-            echo "❌ Billing Service deployment failed"
-          fi
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| HML | ${{ needs.deploy-hml.result == 'success' && '✅' || needs.deploy-hml.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PRD | ${{ needs.deploy-prd.result == 'success' && '✅' || needs.deploy-prd.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
