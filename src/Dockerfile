@@ -8,7 +8,7 @@ WORKDIR /src
 
 # Copy nuget.config and replace placeholders with actual token
 COPY nuget.config ./
-RUN sed -i "s/USERNAME/${GITHUB_TOKEN%%:*}/g; s/GITHUB_TOKEN/${GITHUB_TOKEN##*:}/g" nuget.config || true
+RUN sed -i "s/GITHUB_TOKEN/${GITHUB_TOKEN}/g" nuget.config || true
 
 COPY ["Psicomy.Services.Billing.csproj", "./"]
 RUN dotnet restore "Psicomy.Services.Billing.csproj"
