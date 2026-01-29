@@ -6,20 +6,14 @@ FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG GITHUB_TOKEN
 WORKDIR /src
 
-# Configure NuGet for GitHub Packages
-RUN dotnet nuget add source https://nuget.pkg.github.com/PsicomyApp/index.json \
-    --name github \
-    --username PsicomyApp \
-    --password ${GITHUB_TOKEN} \
-    --store-password-in-clear-text
+# Copy nuget.config and replace placeholders with actual token
+COPY nuget.config ./
+RUN sed -i "s/USERNAME/${GITHUB_TOKEN%%:*}/g; s/GITHUB_TOKEN/${GITHUB_TOKEN##*:}/g" nuget.config || true
 
 COPY ["Psicomy.Services.Billing.csproj", "./"]
 RUN dotnet restore "Psicomy.Services.Billing.csproj"
 
 COPY . .
-RUN dotnet build "Psicomy.Services.Billing.csproj" -c Release -o /app/build
-
-FROM build AS publish
 RUN dotnet publish "Psicomy.Services.Billing.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
