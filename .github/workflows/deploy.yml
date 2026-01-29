@@ -82,7 +82,7 @@ jobs:
             echo "🚀 Deploying billing-service to HML..."
 
             # Login to GitHub Container Registry
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u psicomyapp --password-stdin
 
             # Pull the HML image
             docker pull ghcr.io/psicomyapp/psicomy-billing-service:hml-latest
@@ -124,7 +124,7 @@ jobs:
             echo "🚀 Deploying billing-service to PRD..."
 
             # Login to GitHub Container Registry
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u psicomyapp --password-stdin
 
             # Pull the latest image
             docker pull ghcr.io/psicomyapp/psicomy-billing-service:latest
