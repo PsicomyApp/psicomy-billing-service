@@ -5,28 +5,46 @@ using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
 using Serilog;
-using Serilog.Events;
+using Serilog.Sinks.OpenTelemetry;
 
-Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
-    .WriteTo.File(
-        path: "logs/psicomy-billing-.log",
-        rollingInterval: RollingInterval.Day,
-        restrictedToMinimumLevel: LogEventLevel.Information)
-    .CreateLogger();
+// Função auxiliar para configurar o OpenTelemetry (para não duplicar código)
+Action<BatchedOpenTelemetrySinkOptions> configureOtel = options =>
+{
+    options.Endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+                       ?? "http://signoz-otel-collector:4317";
+    options.Protocol = OtlpProtocol.Grpc;
+
+    var serviceName = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "billing-service";
+    options.ResourceAttributes = new Dictionary<string, object>
+    {
+        { "service.name", serviceName },
+        { "deployment.environment", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production" }
+    };
+};
 
 try
 {
+    // 1. Logger de Bootstrap (Pega erros de startup antes do Host subir)
+    Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Information()
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.OpenTelemetry(configureOtel) // Usa a config
+        .CreateLogger();
+
     Log.Information("Starting Psicomy.Services.Billing");
 
     var builder = WebApplication.CreateBuilder(args);
 
+    // 2. Logger da Aplicação (O que vai rodar o dia todo)
     builder.Host.UseSerilog((context, services, loggerConfiguration) =>
     {
         loggerConfiguration
-            .ReadFrom.Configuration(context.Configuration)
+            .ReadFrom.Configuration(context.Configuration) // Lê niveis de log do appsettings
             .ReadFrom.Services(services)
-            .Enrich.FromLogContext();
+            .Enrich.FromLogContext()
+            .WriteTo.Console() // Garante log no console do container
+            .WriteTo.OpenTelemetry(configureOtel);
     });
 
     // Add services
@@ -73,7 +91,8 @@ try
                     "http://127.0.0.1:5173",
                     "https://psicomy.com.br",
                     "https://www.psicomy.com.br",
-                    "https://app.psicomy.com")
+                    "https://app.psicomy.com",
+                    "https://signoz.psicomy.com.br")
                 .AllowAnyMethod()
                 .AllowAnyHeader()
                 .AllowCredentials();
