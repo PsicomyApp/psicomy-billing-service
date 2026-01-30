@@ -52,6 +52,9 @@ try
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddHttpContextAccessor();
 
+    // OpenTelemetry
+    builder.Services.AddOpenTelemetryConfiguration(builder.Configuration);
+
     // Database
     var connectionString = builder.Configuration.GetConnectionString("BillingDb")
         ?? builder.Configuration.GetConnectionString("DefaultConnection")
