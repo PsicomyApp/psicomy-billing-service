@@ -171,7 +171,7 @@ public class StripeWebhookController : ControllerBase
                 TenantId = license.TenantId,
                 LicenseId = license.Id,
                 StripeInvoiceId = invoice.Id,
-                StripePaymentIntentId = invoice.PaymentIntentId,
+                StripePaymentIntentId = invoice.Payments.FirstOrDefault(p=>p.Status == "paid")?.Payment.PaymentIntentId,
                 Amount = invoice.AmountPaid / 100m,
                 Currency = invoice.Currency,
                 Status = "paid",
@@ -248,8 +248,8 @@ public class StripeWebhookController : ControllerBase
                 _ => license.Status
             };
 
-            if (subscription.CurrentPeriodEnd != default)
-                license.ExpiresAt = subscription.CurrentPeriodEnd.AddDays(3);
+            if (subscription.EndedAt != default)
+                license.ExpiresAt = subscription.EndedAt?.AddDays(3);
 
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
