@@ -5,55 +5,44 @@ using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
 using Serilog;
-using Serilog.Sinks.OpenTelemetry;
+using Psicomy.Shared.Kernel.Observability;
 
-// Função auxiliar para configurar o OpenTelemetry (para não duplicar código)
-Action<BatchedOpenTelemetrySinkOptions> configureOtel = options =>
-{
-    options.Endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-                       ?? "http://signoz-otel-collector:4317";
-    options.Protocol = OtlpProtocol.Grpc;
-
-    var serviceName = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "billing-service";
-    options.ResourceAttributes = new Dictionary<string, object>
-    {
-        { "service.name", serviceName },
-        { "deployment.environment", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production" }
-    };
-};
+const string serviceName = "psicomy-billing-service";
 
 try
 {
-    // 1. Logger de Bootstrap (Pega erros de startup antes do Host subir)
-    Log.Logger = new LoggerConfiguration()
-        .MinimumLevel.Information()
-        .Enrich.FromLogContext()
-        .WriteTo.Console()
-        .WriteTo.OpenTelemetry(configureOtel) // Usa a config
-        .CreateLogger();
-
-    Log.Information("Starting Psicomy.Services.Billing");
-
     var builder = WebApplication.CreateBuilder(args);
+    
+    // Check if OpenTelemetry should be enabled
+    var otelEndpoint = builder.Configuration["OpenTelemetry:OtlpEndpoint"] ?? Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") ?? "";
+    var isDevelopment = builder.Environment.IsDevelopment();
+    var otelEnabled = Environment.GetEnvironmentVariable("OTEL_ENABLED")?.ToLowerInvariant() != "false";
+    var shouldUseOtel = otelEnabled && !string.IsNullOrEmpty(otelEndpoint) &&
+        (isDevelopment || (!otelEndpoint.Contains("localhost") && !otelEndpoint.Contains("127.0.0.1")));
 
-    // 2. Logger da Aplicação (O que vai rodar o dia todo)
     builder.Host.UseSerilog((context, services, loggerConfiguration) =>
     {
         loggerConfiguration
-            .ReadFrom.Configuration(context.Configuration) // Lê niveis de log do appsettings
+            .ReadFrom.Configuration(context.Configuration)
             .ReadFrom.Services(services)
             .Enrich.FromLogContext()
-            .WriteTo.Console() // Garante log no console do container
-            .WriteTo.OpenTelemetry(configureOtel);
+            .WriteTo.Console();
+
+        if (shouldUseOtel)
+        {
+            loggerConfiguration.AddPsicomyOpenTelemetryLogging(context.Configuration, serviceName);
+        }
     });
 
+    if (shouldUseOtel)
+    {
+        builder.Services.AddPsicomyOpenTelemetry(builder.Configuration, serviceName);
+    }
+    
     // Add services
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddHttpContextAccessor();
-
-    // OpenTelemetry
-    builder.Services.AddOpenTelemetryConfiguration(builder.Configuration);
 
     // Database
     var connectionString = builder.Configuration.GetConnectionString("BillingDb")
@@ -91,7 +80,7 @@ try
         {
             policy.WithOrigins(
                     "http://localhost:5173",
-                    "http://127.0.0.1:5173",
+                    "http://1.2.7.0.0.1:5173",
                     "https://psicomy.com.br",
                     "https://www.psicomy.com.br",
                     "https://app.psicomy.com",
