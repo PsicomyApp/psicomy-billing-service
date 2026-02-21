@@ -26,12 +26,8 @@ try
             .ReadFrom.Configuration(context.Configuration)
             .ReadFrom.Services(services)
             .Enrich.FromLogContext()
-            .WriteTo.Console();
-
-        if (shouldUseOtel)
-        {
-            loggerConfiguration.AddPsicomyOpenTelemetryLogging(context.Configuration, serviceName);
-        }
+            .WriteTo.Console()
+            .WriteToPsicomyOpenTelemetry(context.Configuration, serviceName);
     });
 
     if (shouldUseOtel)
