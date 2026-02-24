@@ -64,6 +64,68 @@ public class StripeController : ControllerBase
     }
 
     /// <summary>
+    /// Create a payment intent for Stripe Elements
+    /// </summary>
+    [HttpPost("create-intent")]
+    [AllowAnonymous]
+    public async Task<IActionResult> CreatePaymentIntent([FromBody] CreatePaymentIntentRequest request)
+    {
+        if (request == null || request.PlanId == Guid.Empty)
+            return BadRequest(new { error = "Invalid request" });
+
+        var plan = await _context.PaymentPlans
+            .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
+
+        if (plan == null)
+            return NotFound(new { error = "Payment plan not found" });
+
+        // Calculate amount
+        long amount = (long)(plan.MonthlyPrice * 100);
+        if (request.Period == "annual")
+        {
+             amount = (long)(plan.YearlyPrice * 100);
+        }
+
+        try
+        {
+            var options = new PaymentIntentCreateOptions
+            {
+                Amount = amount,
+                Currency = "brl",
+                AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                {
+                    Enabled = true,
+                },
+                Metadata = new Dictionary<string, string>
+                {
+                    { "plan_id", plan.Id.ToString() },
+                    { "plan_name", plan.Name },
+                    { "period", request.Period ?? "monthly" },
+                    { "tenant_slug", request.TenantSlug },
+                    { "user_email", request.UserEmail },
+                    { "user_name", request.UserName },
+                    { "document", request.Document }
+                }
+            };
+            
+            if (!string.IsNullOrEmpty(request.UserEmail)) 
+            {
+                 options.ReceiptEmail = request.UserEmail;
+            }
+
+            var service = new PaymentIntentService();
+            var intent = await service.CreateAsync(options);
+
+            return Ok(new { clientSecret = intent.ClientSecret });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error creating payment intent");
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Create a checkout session for subscription payment
     /// </summary>
     [HttpPost("create-checkout-session")]
@@ -264,3 +326,11 @@ public class StripeController : ControllerBase
 
 public record CreateCheckoutSessionRequest(Guid PlanId, string? SuccessUrl = null, string? CancelUrl = null);
 public record CreatePortalSessionRequest(string? ReturnUrl = null);
+public record CreatePaymentIntentRequest(
+    Guid PlanId, 
+    string? Period, 
+    string TenantSlug, 
+    string UserEmail, 
+    string UserName, 
+    string Document
+);

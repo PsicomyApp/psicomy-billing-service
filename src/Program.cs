@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
-using Serilog;
+using Psicomy.Shared.Kernel.Messaging;
 using Psicomy.Shared.Kernel.Observability;
 
 const string serviceName = "psicomy-billing-service";
@@ -39,6 +39,9 @@ try
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddHttpContextAccessor();
+
+    // Messaging Bus (Rebus)
+    builder.Services.AddMessagingBus(builder.Configuration);
 
     // Database
     var connectionString = builder.Configuration.GetConnectionString("BillingDb")

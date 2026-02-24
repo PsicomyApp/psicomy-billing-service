@@ -1,28 +1,33 @@
 using Stripe;
 
+using Psicomy.Services.Billing.Options;
+
 namespace Psicomy.Services.Billing.Infrastructure;
 
 public static class StripeServiceExtensions
 {
     public static IServiceCollection AddStripeServices(this IServiceCollection services, IConfiguration configuration)
     {
-        var stripeSettings = new StripeSettings();
-        configuration.GetSection(StripeSettings.SectionName).Bind(stripeSettings);
+        var stripeOptions = new StripeOptions();
+        configuration.GetSection(StripeOptions.SectionName).Bind(stripeOptions);
 
         // Check environment variables as fallback
-        if (string.IsNullOrEmpty(stripeSettings.SecretKey))
-            stripeSettings.SecretKey = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY") ?? string.Empty;
-        if (string.IsNullOrEmpty(stripeSettings.WebhookSecret))
-            stripeSettings.WebhookSecret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET") ?? string.Empty;
-        if (string.IsNullOrEmpty(stripeSettings.PublishableKey))
-            stripeSettings.PublishableKey = Environment.GetEnvironmentVariable("STRIPE_PUBLISHABLE_KEY") ?? string.Empty;
+        if (string.IsNullOrEmpty(stripeOptions.SecretKey))
+            stripeOptions.SecretKey = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY") ?? string.Empty;
+        if (string.IsNullOrEmpty(stripeOptions.WebhookSecret))
+            stripeOptions.WebhookSecret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET") ?? string.Empty;
+        if (string.IsNullOrEmpty(stripeOptions.PublishableKey))
+            stripeOptions.PublishableKey = Environment.GetEnvironmentVariable("STRIPE_PUBLISHABLE_KEY") ?? string.Empty;
+        if (string.IsNullOrEmpty(stripeOptions.DestinationId))
+            stripeOptions.DestinationId = Environment.GetEnvironmentVariable("STRIPE_DESTINATION_ID") ?? string.Empty;
 
-        services.AddSingleton(stripeSettings);
+        services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
+        services.AddSingleton(stripeOptions);
 
         // Configure Stripe API key globally
-        if (!string.IsNullOrEmpty(stripeSettings.SecretKey))
+        if (!string.IsNullOrEmpty(stripeOptions.SecretKey))
         {
-            StripeConfiguration.ApiKey = stripeSettings.SecretKey;
+            StripeConfiguration.ApiKey = stripeOptions.SecretKey;
         }
 
         return services;

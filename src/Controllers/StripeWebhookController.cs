@@ -1,10 +1,6 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Psicomy.Services.Billing.Data;
-using Psicomy.Services.Billing.Infrastructure;
-using Stripe;
-using Stripe.Checkout;
+using Psicomy.Services.Billing.Options;
+using Psicomy.Shared.Kernel.Messaging.Events;
+using Rebus.Bus;
 
 namespace Psicomy.Services.Billing.Controllers;
 
@@ -12,18 +8,21 @@ namespace Psicomy.Services.Billing.Controllers;
 [Route("api/stripe")]
 public class StripeWebhookController : ControllerBase
 {
-    private readonly StripeSettings _stripeSettings;
+    private readonly StripeOptions _stripeOptions;
     private readonly BillingDbContext _context;
     private readonly ILogger<StripeWebhookController> _logger;
+    private readonly IBus _bus;
 
     public StripeWebhookController(
-        StripeSettings stripeSettings,
+        Microsoft.Extensions.Options.IOptions<StripeOptions> stripeOptions,
         BillingDbContext context,
-        ILogger<StripeWebhookController> logger)
+        ILogger<StripeWebhookController> logger,
+        IBus bus)
     {
-        _stripeSettings = stripeSettings;
+        _stripeOptions = stripeOptions.Value;
         _context = context;
         _logger = logger;
+        _bus = bus;
     }
 
     /// <summary>
@@ -40,13 +39,17 @@ public class StripeWebhookController : ControllerBase
             var stripeEvent = EventUtility.ConstructEvent(
                 json,
                 Request.Headers["Stripe-Signature"],
-                _stripeSettings.WebhookSecret
+                _stripeOptions.WebhookSecret
             );
 
             _logger.LogInformation("Stripe webhook received: {EventType} ({EventId})", stripeEvent.Type, stripeEvent.Id);
 
             switch (stripeEvent.Type)
             {
+                case "payment_intent.succeeded":
+                     await HandlePaymentIntentSucceeded(stripeEvent);
+                     break;
+
                 case "checkout.session.completed":
                     await HandleCheckoutSessionCompleted(stripeEvent);
                     break;
@@ -83,6 +86,41 @@ public class StripeWebhookController : ControllerBase
         {
             _logger.LogError(ex, "Error processing Stripe webhook");
             return StatusCode(500, new { error = "Internal server error processing webhook" });
+        }
+    }
+
+    private async Task HandlePaymentIntentSucceeded(Event stripeEvent)
+    {
+        var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+        if (paymentIntent == null) return;
+
+        _logger.LogInformation("PaymentIntent succeeded: {PaymentIntentId}, Amount: {Amount}", paymentIntent.Id, paymentIntent.Amount);
+
+        // Extract metadata for provisioning
+        if (paymentIntent.Metadata.TryGetValue("tenant_slug", out var tenantSlug))
+        {
+             // Publish event for Tenancy Service to handle provisioning
+             
+             paymentIntent.Metadata.TryGetValue("plan_id", out var planId);
+             paymentIntent.Metadata.TryGetValue("user_email", out var userEmail);
+             paymentIntent.Metadata.TryGetValue("user_name", out var userName);
+             paymentIntent.Metadata.TryGetValue("document", out var document);
+             paymentIntent.Metadata.TryGetValue("period", out var period);
+             
+             var evt = new TenantProvisioningRequestedEvent(
+                 TenantSlug: tenantSlug,
+                 PlanId: planId ?? "",
+                 UserEmail: userEmail ?? "",
+                 UserName: userName ?? "",
+                 Document: document ?? "",
+                 Period: period ?? "monthly",
+                 StripePaymentIntentId: paymentIntent.Id,
+                 Amount: paymentIntent.Amount / 100m,
+                 PaidAt: DateTime.UtcNow
+             );
+
+             await _bus.Publish(evt);
+             _logger.LogInformation("Published TenantProvisioningRequestedEvent for {TenantSlug}", tenantSlug);
         }
     }
 
@@ -238,7 +276,7 @@ public class StripeWebhookController : ControllerBase
 
         if (license != null)
         {
-            license.Status = subscription.Status switch
+            var newStatus = subscription.Status switch
             {
                 "active" => "active",
                 "past_due" => "past_due",
@@ -248,11 +286,24 @@ public class StripeWebhookController : ControllerBase
                 _ => license.Status
             };
 
+            license.Status = newStatus;
+
             if (subscription.EndedAt != default)
                 license.ExpiresAt = subscription.EndedAt?.AddDays(3);
 
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
+
+            // Notify Tenancy Service about the status change
+            var evt = new SubscriptionStatusChangedEvent(
+                StripeSubscriptionId: subscription.Id,
+                Status: newStatus,
+                StripeCustomerId: subscription.CustomerId,
+                EndedAt: subscription.EndedAt,
+                OccurredAt: DateTime.UtcNow
+            );
+            await _bus.Publish(evt);
+            _logger.LogInformation("Published SubscriptionStatusChangedEvent for Subscription {SubscriptionId}", subscription.Id);
         }
     }
 }
