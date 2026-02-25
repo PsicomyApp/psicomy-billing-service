@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: psicomyapp/psicomy-billing-service
+  REGISTRY: container-registry.br-se1.magalu.cloud
+  IMAGE_NAME: container-registry.br-se1.magalu.cloud/psicomycr/psicomy-billing-service
   SERVICE_NAME: billing-service
 
 jobs:
@@ -26,25 +26,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Container Registry
+      - name: Log in to Magalu Cloud Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.MAGALU_CR_USER }}
+          password: ${{ secrets.MAGALU_CR_PASSWORD }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./src
           file: ./src/Dockerfile
@@ -74,21 +74,28 @@ jobs:
             set -e
             echo "🚀 Deploying billing-service to PRD..."
 
-            # Login to GitHub Container Registry
-            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u psicomyapp --password-stdin
+            # Login to Magalu Cloud Container Registry
+            echo "${{ secrets.MAGALU_CR_PASSWORD }}" | sudo docker login container-registry.br-se1.magalu.cloud -u "${{ secrets.MAGALU_CR_USER }}" --password-stdin
 
             # Pull the latest image
-            docker pull ghcr.io/psicomyapp/psicomy-billing-service:latest
+            sudo docker pull container-registry.br-se1.magalu.cloud/psicomycr/psicomy-billing-service:latest
 
             # Navigate to PRD directory
             cd /opt/psicomy/prd
 
             # Update service via docker-compose
-            docker compose pull billing-service
-            docker compose up -d --no-deps --force-recreate billing-service
+            sudo docker compose pull billing-service
+            sudo docker compose up -d --no-deps --force-recreate billing-service
+
+            # Wait for container to start
+            sleep 10
+
+            # Show container logs for diagnostics
+            echo "📋 Container logs:"
+            sudo docker compose logs billing-service --tail=50 || true
 
             # Cleanup old images
-            docker image prune -af --filter "until=168h"
+            sudo docker image prune -af --filter "until=168h"
 
             echo "✅ billing-service deployed to PRD"
 
