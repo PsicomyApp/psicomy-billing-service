@@ -60,15 +60,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    environment: prd
 
     steps:
       - name: Deploy to PRD Server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.PRD_SSH_HOST }}
-          username: ${{ secrets.PRD_SSH_USERNAME }}
-          key: ${{ secrets.PRD_SSH_KEY }}
+          host: ${{ secrets.BACKEND_DO_HOST }}
+          username: ${{ secrets.BACKEND_DO_USERNAME }}
+          key: ${{ secrets.BACKEND_DO_SSH_KEY }}
           port: 22
           script: |
             set -e
