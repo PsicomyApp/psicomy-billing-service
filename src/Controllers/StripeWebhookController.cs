@@ -1,6 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Psicomy.Services.Billing.Data;
+using Psicomy.Services.Billing.Middleware;
 using Psicomy.Services.Billing.Options;
 using Psicomy.Shared.Kernel.Messaging.Events;
 using Rebus.Bus;
+using Stripe;
+using Stripe.Checkout;
 
 namespace Psicomy.Services.Billing.Controllers;
 
@@ -46,10 +53,6 @@ public class StripeWebhookController : ControllerBase
 
             switch (stripeEvent.Type)
             {
-                case "payment_intent.succeeded":
-                     await HandlePaymentIntentSucceeded(stripeEvent);
-                     break;
-
                 case "checkout.session.completed":
                     await HandleCheckoutSessionCompleted(stripeEvent);
                     break;
@@ -86,41 +89,6 @@ public class StripeWebhookController : ControllerBase
         {
             _logger.LogError(ex, "Error processing Stripe webhook");
             return StatusCode(500, new { error = "Internal server error processing webhook" });
-        }
-    }
-
-    private async Task HandlePaymentIntentSucceeded(Event stripeEvent)
-    {
-        var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
-        if (paymentIntent == null) return;
-
-        _logger.LogInformation("PaymentIntent succeeded: {PaymentIntentId}, Amount: {Amount}", paymentIntent.Id, paymentIntent.Amount);
-
-        // Extract metadata for provisioning
-        if (paymentIntent.Metadata.TryGetValue("tenant_slug", out var tenantSlug))
-        {
-             // Publish event for Tenancy Service to handle provisioning
-             
-             paymentIntent.Metadata.TryGetValue("plan_id", out var planId);
-             paymentIntent.Metadata.TryGetValue("user_email", out var userEmail);
-             paymentIntent.Metadata.TryGetValue("user_name", out var userName);
-             paymentIntent.Metadata.TryGetValue("document", out var document);
-             paymentIntent.Metadata.TryGetValue("period", out var period);
-             
-             var evt = new TenantProvisioningRequestedEvent(
-                 TenantSlug: tenantSlug,
-                 PlanId: planId ?? "",
-                 UserEmail: userEmail ?? "",
-                 UserName: userName ?? "",
-                 Document: document ?? "",
-                 Period: period ?? "monthly",
-                 StripePaymentIntentId: paymentIntent.Id,
-                 Amount: paymentIntent.Amount / 100m,
-                 PaidAt: DateTime.UtcNow
-             );
-
-             await _bus.Publish(evt);
-             _logger.LogInformation("Published TenantProvisioningRequestedEvent for {TenantSlug}", tenantSlug);
         }
     }
 
@@ -202,14 +170,25 @@ public class StripeWebhookController : ControllerBase
             if (invoice.PeriodEnd != default)
                 license.ExpiresAt = invoice.PeriodEnd.AddDays(3);
 
-            // Create invoice record
+            // Extract PaymentIntentId from the invoice
+            string? paymentIntentId = null;
+            try
+            {
+                var payment = invoice.Payments?.FirstOrDefault(p => p.Status == "paid");
+                paymentIntentId = payment?.Payment?.PaymentIntentId;
+            }
+            catch
+            {
+                // Fallback: PaymentIntentId might not be available in all Stripe API versions
+            }
+
             var paymentInvoice = new Models.PaymentInvoice
             {
                 Id = Guid.NewGuid(),
                 TenantId = license.TenantId,
                 LicenseId = license.Id,
                 StripeInvoiceId = invoice.Id,
-                StripePaymentIntentId = invoice.Payments.FirstOrDefault(p=>p.Status == "paid")?.Payment.PaymentIntentId,
+                StripePaymentIntentId = paymentIntentId,
                 Amount = invoice.AmountPaid / 100m,
                 Currency = invoice.Currency,
                 Status = "paid",
@@ -294,7 +273,6 @@ public class StripeWebhookController : ControllerBase
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
-            // Notify Tenancy Service about the status change
             var evt = new SubscriptionStatusChangedEvent(
                 StripeSubscriptionId: subscription.Id,
                 Status: newStatus,

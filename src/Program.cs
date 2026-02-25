@@ -6,6 +6,7 @@ using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
 using Psicomy.Shared.Kernel.Messaging;
 using Psicomy.Shared.Kernel.Observability;
+using Serilog;
 
 const string serviceName = "psicomy-billing-service";
 

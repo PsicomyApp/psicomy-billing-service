@@ -39,7 +39,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Psicomy.Shared.Kernel" Version="1.7.6" />
+    <PackageReference Include="Psicomy.Shared.Kernel" Version="1.7.7" />
   </ItemGroup>
 
 </Project>

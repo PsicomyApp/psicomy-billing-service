@@ -40,6 +40,8 @@ public class BillingDbContext : DbContext
             builder.Property(e => e.Tier).HasMaxLength(50);
             builder.Property(e => e.MonthlyPrice).HasPrecision(18, 2);
             builder.Property(e => e.YearlyPrice).HasPrecision(18, 2);
+            builder.Property(e => e.StripePriceIdMonthly).HasMaxLength(100);
+            builder.Property(e => e.StripePriceIdYearly).HasMaxLength(100);
         });
 
         modelBuilder.Entity<PaymentInvoice>(builder =>
@@ -95,6 +97,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 0,
                 MaxUsers = 1,
                 IsActive = true,
+                StripePriceIdMonthly = null,
+                StripePriceIdYearly = null,
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -108,6 +112,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 399.00m,
                 MaxUsers = 1,
                 IsActive = true,
+                StripePriceIdMonthly = "price_1T4Ua5DaFYi3dWwbt7W5D8z0",
+                StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbXEEPW2Kt",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -121,6 +127,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 799.00m,
                 MaxUsers = 1,
                 IsActive = true,
+                StripePriceIdMonthly = "price_1T4Ua6DaFYi3dWwbL3RCml0z",
+                StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbdvNFQSlt",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -134,6 +142,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 1599.00m,
                 MaxUsers = 5,
                 IsActive = true,
+                StripePriceIdMonthly = "price_1T4Ua7DaFYi3dWwbBpfUi8wT",
+                StripePriceIdYearly = "price_1T4Ua7DaFYi3dWwbE6X3dkJb",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -147,6 +157,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 2999.00m,
                 MaxUsers = 15,
                 IsActive = true,
+                StripePriceIdMonthly = "price_1T4Ua8DaFYi3dWwblNmhEDm8",
+                StripePriceIdYearly = "price_1T4Ua9DaFYi3dWwbgi1r39EL",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -160,6 +172,8 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 4999.00m,
                 MaxUsers = -1, // Unlimited
                 IsActive = true,
+                StripePriceIdMonthly = "price_1T4UaADaFYi3dWwbzSmmgMOq",
+                StripePriceIdYearly = "price_1T4UaBDaFYi3dWwbzP5ZV6yn",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             }

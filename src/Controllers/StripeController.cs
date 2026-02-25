@@ -1,9 +1,12 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Psicomy.Services.Billing.Data;
-using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
+using Psicomy.Services.Billing.Options;
+using Psicomy.Shared.Kernel.Messaging.Events;
+using Rebus.Bus;
 using Stripe;
 using Stripe.Checkout;
 
@@ -14,18 +17,21 @@ namespace Psicomy.Services.Billing.Controllers;
 [Authorize]
 public class StripeController : ControllerBase
 {
-    private readonly StripeSettings _stripeSettings;
+    private readonly StripeOptions _stripeOptions;
     private readonly BillingDbContext _context;
     private readonly ILogger<StripeController> _logger;
+    private readonly IBus _bus;
 
     public StripeController(
-        StripeSettings stripeSettings,
+        IOptions<StripeOptions> stripeOptions,
         BillingDbContext context,
-        ILogger<StripeController> logger)
+        ILogger<StripeController> logger,
+        IBus bus)
     {
-        _stripeSettings = stripeSettings;
+        _stripeOptions = stripeOptions.Value;
         _context = context;
         _logger = logger;
+        _bus = bus;
     }
 
     /// <summary>
@@ -35,7 +41,7 @@ public class StripeController : ControllerBase
     [AllowAnonymous]
     public IActionResult GetConfig()
     {
-        return Ok(new { publishableKey = _stripeSettings.PublishableKey });
+        return Ok(new { publishableKey = _stripeOptions.PublishableKey });
     }
 
     /// <summary>
@@ -64,69 +70,7 @@ public class StripeController : ControllerBase
     }
 
     /// <summary>
-    /// Create a payment intent for Stripe Elements
-    /// </summary>
-    [HttpPost("create-intent")]
-    [AllowAnonymous]
-    public async Task<IActionResult> CreatePaymentIntent([FromBody] CreatePaymentIntentRequest request)
-    {
-        if (request == null || request.PlanId == Guid.Empty)
-            return BadRequest(new { error = "Invalid request" });
-
-        var plan = await _context.PaymentPlans
-            .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
-
-        if (plan == null)
-            return NotFound(new { error = "Payment plan not found" });
-
-        // Calculate amount
-        long amount = (long)(plan.MonthlyPrice * 100);
-        if (request.Period == "annual")
-        {
-             amount = (long)(plan.YearlyPrice * 100);
-        }
-
-        try
-        {
-            var options = new PaymentIntentCreateOptions
-            {
-                Amount = amount,
-                Currency = "brl",
-                AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
-                {
-                    Enabled = true,
-                },
-                Metadata = new Dictionary<string, string>
-                {
-                    { "plan_id", plan.Id.ToString() },
-                    { "plan_name", plan.Name },
-                    { "period", request.Period ?? "monthly" },
-                    { "tenant_slug", request.TenantSlug },
-                    { "user_email", request.UserEmail },
-                    { "user_name", request.UserName },
-                    { "document", request.Document }
-                }
-            };
-            
-            if (!string.IsNullOrEmpty(request.UserEmail)) 
-            {
-                 options.ReceiptEmail = request.UserEmail;
-            }
-
-            var service = new PaymentIntentService();
-            var intent = await service.CreateAsync(options);
-
-            return Ok(new { clientSecret = intent.ClientSecret });
-        }
-        catch (StripeException ex)
-        {
-            _logger.LogError(ex, "Error creating payment intent");
-            return BadRequest(new { error = ex.Message });
-        }
-    }
-
-    /// <summary>
-    /// Create a checkout session for subscription payment
+    /// Create a checkout session for subscription payment (Stripe Hosted Checkout)
     /// </summary>
     [HttpPost("create-checkout-session")]
     public async Task<IActionResult> CreateCheckoutSession([FromBody] CreateCheckoutSessionRequest request)
@@ -145,35 +89,30 @@ public class StripeController : ControllerBase
         if (plan.Tier == "Student" || plan.MonthlyPrice == 0)
             return await ActivateFreePlan(tenantId, plan.Id);
 
+        // Determine which Stripe Price ID to use
+        var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
+        var stripePriceId = isAnnual ? plan.StripePriceIdYearly : plan.StripePriceIdMonthly;
+
+        if (string.IsNullOrEmpty(stripePriceId))
+        {
+            _logger.LogError("No Stripe Price ID configured for plan {PlanId}, period {Period}", plan.Id, request.Period);
+            return BadRequest(new { error = "Plan pricing not configured" });
+        }
+
         try
         {
-            var baseUrl = $"{Request.Scheme}://{Request.Host}";
             var frontendUrl = request.SuccessUrl?.Contains("psicomy") == true
                 ? new Uri(request.SuccessUrl).GetLeftPart(UriPartial.Authority)
                 : "https://psicomy.com.br";
 
             var options = new SessionCreateOptions
             {
-                PaymentMethodTypes = new List<string> { "card" },
                 Mode = "subscription",
                 LineItems = new List<SessionLineItemOptions>
                 {
                     new SessionLineItemOptions
                     {
-                        PriceData = new SessionLineItemPriceDataOptions
-                        {
-                            Currency = "brl",
-                            ProductData = new SessionLineItemPriceDataProductDataOptions
-                            {
-                                Name = plan.Name,
-                                Description = plan.Description
-                            },
-                            UnitAmount = (long)(plan.MonthlyPrice * 100),
-                            Recurring = new SessionLineItemPriceDataRecurringOptions
-                            {
-                                Interval = "month"
-                            }
-                        },
+                        Price = stripePriceId,
                         Quantity = 1
                     }
                 },
@@ -182,7 +121,8 @@ public class StripeController : ControllerBase
                 Metadata = new Dictionary<string, string>
                 {
                     { "tenant_id", tenantId },
-                    { "plan_id", plan.Id.ToString() }
+                    { "plan_id", plan.Id.ToString() },
+                    { "period", request.Period ?? "monthly" }
                 },
                 CustomerEmail = User.FindFirst("email")?.Value
             };
@@ -190,8 +130,8 @@ public class StripeController : ControllerBase
             var service = new SessionService();
             var session = await service.CreateAsync(options);
 
-            _logger.LogInformation("Created checkout session {SessionId} for tenant {TenantId}, plan {PlanId}",
-                session.Id, tenantId, plan.Id);
+            _logger.LogInformation("Created checkout session {SessionId} for tenant {TenantId}, plan {PlanId}, period {Period}",
+                session.Id, tenantId, plan.Id, request.Period);
 
             return Ok(new { sessionId = session.Id, url = session.Url });
         }
@@ -277,6 +217,278 @@ public class StripeController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Preview proration for a plan change
+    /// </summary>
+    [HttpPost("preview-plan-change")]
+    public async Task<IActionResult> PreviewPlanChange([FromBody] PlanChangeRequest request)
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        var license = await _context.TenantLicenses
+            .Include(l => l.Plan)
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+
+        if (license == null || string.IsNullOrEmpty(license.StripeSubscriptionId))
+            return NotFound(new { error = "No active subscription found" });
+
+        var newPlan = await _context.PaymentPlans
+            .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
+
+        if (newPlan == null)
+            return NotFound(new { error = "Target plan not found" });
+
+        var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
+        var newPriceId = isAnnual ? newPlan.StripePriceIdYearly : newPlan.StripePriceIdMonthly;
+
+        if (string.IsNullOrEmpty(newPriceId))
+            return BadRequest(new { error = "Target plan pricing not configured" });
+
+        try
+        {
+            var subscriptionService = new SubscriptionService();
+            var subscription = await subscriptionService.GetAsync(license.StripeSubscriptionId);
+            var currentItem = subscription.Items.Data.FirstOrDefault();
+
+            if (currentItem == null)
+                return BadRequest(new { error = "No subscription items found" });
+
+            // Preview upcoming invoice with the plan change
+            var invoiceService = new InvoiceService();
+            var previewOptions = new InvoiceCreatePreviewOptions
+            {
+                Customer = license.StripeCustomerId,
+                Subscription = license.StripeSubscriptionId,
+                SubscriptionDetails = new InvoiceSubscriptionDetailsOptions
+                {
+                    Items = new List<InvoiceSubscriptionDetailsItemOptions>
+                    {
+                        new InvoiceSubscriptionDetailsItemOptions
+                        {
+                            Id = currentItem.Id,
+                            Price = newPriceId
+                        }
+                    },
+                    ProrationBehavior = "create_prorations"
+                }
+            };
+
+            var preview = await invoiceService.CreatePreviewAsync(previewOptions);
+
+            return Ok(new
+            {
+                currentPlan = license.Plan?.Name,
+                currentTier = license.Plan?.Tier,
+                newPlan = newPlan.Name,
+                newTier = newPlan.Tier,
+                proratedAmount = preview.AmountDue / 100m,
+                currency = preview.Currency,
+                nextBillingDate = subscription.Items.Data.FirstOrDefault()?.CurrentPeriodEnd,
+                immediateCharge = preview.AmountDue > 0
+            });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error previewing plan change for tenant {TenantId}", tenantId);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Execute a plan change (upgrade/downgrade)
+    /// </summary>
+    [HttpPost("change-plan")]
+    public async Task<IActionResult> ChangePlan([FromBody] PlanChangeRequest request)
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        var license = await _context.TenantLicenses
+            .Include(l => l.Plan)
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+
+        if (license == null || string.IsNullOrEmpty(license.StripeSubscriptionId))
+            return NotFound(new { error = "No active subscription found" });
+
+        var newPlan = await _context.PaymentPlans
+            .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
+
+        if (newPlan == null)
+            return NotFound(new { error = "Target plan not found" });
+
+        var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
+        var newPriceId = isAnnual ? newPlan.StripePriceIdYearly : newPlan.StripePriceIdMonthly;
+
+        if (string.IsNullOrEmpty(newPriceId))
+            return BadRequest(new { error = "Target plan pricing not configured" });
+
+        try
+        {
+            var subscriptionService = new SubscriptionService();
+            var subscription = await subscriptionService.GetAsync(license.StripeSubscriptionId);
+            var currentItem = subscription.Items.Data.FirstOrDefault();
+
+            if (currentItem == null)
+                return BadRequest(new { error = "No subscription items found" });
+
+            // Update the subscription with the new price
+            var updateOptions = new SubscriptionUpdateOptions
+            {
+                Items = new List<SubscriptionItemOptions>
+                {
+                    new SubscriptionItemOptions
+                    {
+                        Id = currentItem.Id,
+                        Price = newPriceId
+                    }
+                },
+                ProrationBehavior = "create_prorations"
+            };
+
+            var updatedSubscription = await subscriptionService.UpdateAsync(
+                license.StripeSubscriptionId, updateOptions);
+
+            // Update local license
+            var oldPlanName = license.Plan?.Name;
+            license.PlanId = newPlan.Id;
+            license.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            // Notify tenancy-service about the plan change
+            await _bus.Publish(new PlanUpdatedEvent(
+                TenantId: Guid.Empty,
+                Slug: tenantId,
+                PlanTier: newPlan.Tier,
+                UpdatedAt: DateTime.UtcNow
+            ));
+
+            _logger.LogInformation(
+                "Plan changed for tenant {TenantId}: {OldPlan} -> {NewPlan}",
+                tenantId, oldPlanName, newPlan.Name);
+
+            return Ok(new
+            {
+                success = true,
+                subscription = new
+                {
+                    id = updatedSubscription.Id,
+                    status = updatedSubscription.Status,
+                    currentPeriodEnd = updatedSubscription.Items.Data.FirstOrDefault()?.CurrentPeriodEnd
+                },
+                newPlan = new
+                {
+                    newPlan.Id,
+                    newPlan.Name,
+                    newPlan.Tier
+                }
+            });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error changing plan for tenant {TenantId}", tenantId);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Cancel subscription at period end
+    /// </summary>
+    [HttpPost("cancel-subscription")]
+    public async Task<IActionResult> CancelSubscription()
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        var license = await _context.TenantLicenses
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+
+        if (license == null || string.IsNullOrEmpty(license.StripeSubscriptionId))
+            return NotFound(new { error = "No active subscription found" });
+
+        try
+        {
+            var subscriptionService = new SubscriptionService();
+            var updateOptions = new SubscriptionUpdateOptions
+            {
+                CancelAtPeriodEnd = true
+            };
+
+            var subscription = await subscriptionService.UpdateAsync(
+                license.StripeSubscriptionId, updateOptions);
+
+            license.Status = "cancelling";
+            license.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Subscription cancellation scheduled for tenant {TenantId}, cancels at {CancelAt}",
+                tenantId, subscription.Items.Data.FirstOrDefault()?.CurrentPeriodEnd);
+
+            return Ok(new
+            {
+                success = true,
+                cancelAt = subscription.Items.Data.FirstOrDefault()?.CurrentPeriodEnd,
+                message = "Subscription will be cancelled at the end of the current billing period"
+            });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error cancelling subscription for tenant {TenantId}", tenantId);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Reactivate a subscription that was scheduled for cancellation
+    /// </summary>
+    [HttpPost("reactivate-subscription")]
+    public async Task<IActionResult> ReactivateSubscription()
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        var license = await _context.TenantLicenses
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId &&
+                (l.Status == "cancelling" || l.Status == "active") &&
+                l.IsActive);
+
+        if (license == null || string.IsNullOrEmpty(license.StripeSubscriptionId))
+            return NotFound(new { error = "No subscription found to reactivate" });
+
+        try
+        {
+            var subscriptionService = new SubscriptionService();
+            var updateOptions = new SubscriptionUpdateOptions
+            {
+                CancelAtPeriodEnd = false
+            };
+
+            var subscription = await subscriptionService.UpdateAsync(
+                license.StripeSubscriptionId, updateOptions);
+
+            license.Status = "active";
+            license.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Subscription reactivated for tenant {TenantId}", tenantId);
+
+            return Ok(new
+            {
+                success = true,
+                message = "Subscription reactivated successfully"
+            });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error reactivating subscription for tenant {TenantId}", tenantId);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     private async Task<IActionResult> ActivateFreePlan(string tenantId, Guid planId)
     {
         var license = await _context.TenantLicenses
@@ -324,13 +536,11 @@ public class StripeController : ControllerBase
     }
 }
 
-public record CreateCheckoutSessionRequest(Guid PlanId, string? SuccessUrl = null, string? CancelUrl = null);
-public record CreatePortalSessionRequest(string? ReturnUrl = null);
-public record CreatePaymentIntentRequest(
-    Guid PlanId, 
-    string? Period, 
-    string TenantSlug, 
-    string UserEmail, 
-    string UserName, 
-    string Document
+public record CreateCheckoutSessionRequest(
+    Guid PlanId,
+    string? Period = "monthly",
+    string? SuccessUrl = null,
+    string? CancelUrl = null
 );
+public record CreatePortalSessionRequest(string? ReturnUrl = null);
+public record PlanChangeRequest(Guid PlanId, string? Period = "monthly");
