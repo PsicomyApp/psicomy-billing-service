@@ -277,16 +277,21 @@ public class StripeController : ControllerBase
 
             var preview = await invoiceService.CreatePreviewAsync(previewOptions);
 
+            var isUpgrade = preview.AmountDue > 0;
+            var isDowngrade = preview.AmountDue < 0;
+
             return Ok(new
             {
                 currentPlan = license.Plan?.Name,
                 currentTier = license.Plan?.Tier,
                 newPlan = newPlan.Name,
                 newTier = newPlan.Tier,
-                proratedAmount = preview.AmountDue / 100m,
+                proratedAmount = Math.Abs(preview.AmountDue) / 100m,
                 currency = preview.Currency,
                 nextBillingDate = subscription.Items.Data.FirstOrDefault()?.CurrentPeriodEnd,
-                immediateCharge = preview.AmountDue > 0
+                immediateCharge = isUpgrade,
+                credit = isDowngrade,
+                direction = isUpgrade ? "upgrade" : isDowngrade ? "downgrade" : "same"
             });
         }
         catch (StripeException ex)
