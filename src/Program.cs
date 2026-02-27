@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
+using Psicomy.Services.Billing.Options;
 using Psicomy.Shared.Kernel.Messaging;
 using Psicomy.Shared.Kernel.Observability;
 using Serilog;
@@ -97,11 +98,20 @@ try
 
     var app = builder.Build();
 
-    // Apply migrations
+    // Apply migrations and seed Stripe products
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<BillingDbContext>();
         await db.Database.MigrateAsync();
+
+        // Seed Stripe Products/Prices when enabled via configuration
+        var stripeOptions = scope.ServiceProvider.GetRequiredService<StripeOptions>();
+        if (stripeOptions.SeedProducts)
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<StripeProductSeeder>>();
+            var seeder = new StripeProductSeeder(app.Services, logger);
+            await seeder.SeedAsync();
+        }
     }
 
     if (app.Environment.IsDevelopment())

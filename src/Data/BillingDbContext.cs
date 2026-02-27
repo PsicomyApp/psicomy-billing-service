@@ -40,8 +40,11 @@ public class BillingDbContext : DbContext
             builder.Property(e => e.Tier).HasMaxLength(50);
             builder.Property(e => e.MonthlyPrice).HasPrecision(18, 2);
             builder.Property(e => e.YearlyPrice).HasPrecision(18, 2);
+            builder.Property(e => e.ExtraSeatPrice).HasPrecision(18, 2);
+            builder.Property(e => e.StripeProductId).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdMonthly).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdYearly).HasMaxLength(100);
+            builder.Property(e => e.StripePriceIdPerSeat).HasMaxLength(100);
         });
 
         modelBuilder.Entity<PaymentInvoice>(builder =>
@@ -96,6 +99,7 @@ public class BillingDbContext : DbContext
                 MonthlyPrice = 0,
                 YearlyPrice = 0,
                 MaxUsers = 1,
+                IncludedUsers = 1,
                 IsActive = true,
                 StripePriceIdMonthly = null,
                 StripePriceIdYearly = null,
@@ -111,6 +115,7 @@ public class BillingDbContext : DbContext
                 MonthlyPrice = 39.90m,
                 YearlyPrice = 399.00m,
                 MaxUsers = 1,
+                IncludedUsers = 1,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4Ua5DaFYi3dWwbt7W5D8z0",
                 StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbXEEPW2Kt",
@@ -126,6 +131,7 @@ public class BillingDbContext : DbContext
                 MonthlyPrice = 79.90m,
                 YearlyPrice = 799.00m,
                 MaxUsers = 1,
+                IncludedUsers = 1,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4Ua6DaFYi3dWwbL3RCml0z",
                 StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbdvNFQSlt",
@@ -140,7 +146,8 @@ public class BillingDbContext : DbContext
                 Tier = "EnterpriseBasic",
                 MonthlyPrice = 159.90m,
                 YearlyPrice = 1599.00m,
-                MaxUsers = 5,
+                MaxUsers = 8,
+                IncludedUsers = 8,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4Ua7DaFYi3dWwbBpfUi8wT",
                 StripePriceIdYearly = "price_1T4Ua7DaFYi3dWwbE6X3dkJb",
@@ -156,6 +163,7 @@ public class BillingDbContext : DbContext
                 MonthlyPrice = 299.90m,
                 YearlyPrice = 2999.00m,
                 MaxUsers = 15,
+                IncludedUsers = 15,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4Ua8DaFYi3dWwblNmhEDm8",
                 StripePriceIdYearly = "price_1T4Ua9DaFYi3dWwbgi1r39EL",
@@ -166,11 +174,13 @@ public class BillingDbContext : DbContext
             {
                 Id = Guid.Parse("66666666-6666-6666-6666-666666666666"),
                 Name = "Enterprise Plus",
-                Description = "Plano empresarial ilimitado",
+                Description = "Plano empresarial ilimitado com cobranca variavel",
                 Tier = "EnterprisePlus",
-                MonthlyPrice = 499.90m,
-                YearlyPrice = 4999.00m,
-                MaxUsers = -1, // Unlimited
+                MonthlyPrice = 349.90m,
+                YearlyPrice = 3499.00m,
+                MaxUsers = -1, // Soft limit: 15 included + R$35/extra
+                IncludedUsers = 15,
+                ExtraSeatPrice = 35m,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4UaADaFYi3dWwbzSmmgMOq",
                 StripePriceIdYearly = "price_1T4UaBDaFYi3dWwbzP5ZV6yn",

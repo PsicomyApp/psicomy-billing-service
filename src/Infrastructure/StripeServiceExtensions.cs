@@ -21,6 +21,10 @@ public static class StripeServiceExtensions
         if (string.IsNullOrEmpty(stripeOptions.DestinationId))
             stripeOptions.DestinationId = Environment.GetEnvironmentVariable("STRIPE_DESTINATION_ID") ?? string.Empty;
 
+        var seedProducts = Environment.GetEnvironmentVariable("STRIPE_SEED_PRODUCTS");
+        if (!string.IsNullOrEmpty(seedProducts))
+            stripeOptions.SeedProducts = string.Equals(seedProducts, "true", StringComparison.OrdinalIgnoreCase);
+
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.AddSingleton(stripeOptions);
 

@@ -62,7 +62,9 @@ public class StripeController : ControllerBase
                 p.Tier,
                 p.MonthlyPrice,
                 p.YearlyPrice,
-                p.MaxUsers
+                p.MaxUsers,
+                p.IncludedUsers,
+                p.ExtraSeatPrice
             })
             .ToListAsync();
 
@@ -105,17 +107,35 @@ public class StripeController : ControllerBase
                 ? new Uri(request.SuccessUrl).GetLeftPart(UriPartial.Authority)
                 : "https://psicomy.com.br";
 
+            var lineItems = new List<SessionLineItemOptions>
+            {
+                new SessionLineItemOptions
+                {
+                    Price = stripePriceId,
+                    Quantity = 1
+                }
+            };
+
+            // EnterprisePlus: add per-seat addon line item if extra users beyond included
+            if (plan.Tier == "EnterprisePlus" &&
+                !string.IsNullOrEmpty(plan.StripePriceIdPerSeat) &&
+                !isAnnual) // Per-seat addon is monthly; annual plans handle it separately
+            {
+                var extraSeats = request.ExtraSeats ?? 0;
+                if (extraSeats > 0)
+                {
+                    lineItems.Add(new SessionLineItemOptions
+                    {
+                        Price = plan.StripePriceIdPerSeat,
+                        Quantity = extraSeats
+                    });
+                }
+            }
+
             var options = new SessionCreateOptions
             {
                 Mode = "subscription",
-                LineItems = new List<SessionLineItemOptions>
-                {
-                    new SessionLineItemOptions
-                    {
-                        Price = stripePriceId,
-                        Quantity = 1
-                    }
-                },
+                LineItems = lineItems,
                 SuccessUrl = request.SuccessUrl ?? $"{frontendUrl}/dashboard?payment=success",
                 CancelUrl = request.CancelUrl ?? $"{frontendUrl}/upgrade?payment=cancelled",
                 Metadata = new Dictionary<string, string>
@@ -545,7 +565,8 @@ public record CreateCheckoutSessionRequest(
     Guid PlanId,
     string? Period = "monthly",
     string? SuccessUrl = null,
-    string? CancelUrl = null
+    string? CancelUrl = null,
+    int? ExtraSeats = null
 );
 public record CreatePortalSessionRequest(string? ReturnUrl = null);
 public record PlanChangeRequest(Guid PlanId, string? Period = "monthly");
