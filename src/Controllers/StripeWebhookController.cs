@@ -33,7 +33,8 @@ public class StripeWebhookController : ControllerBase
     }
 
     /// <summary>
-    /// Stripe webhook endpoint - receives payment events
+    /// Consolidated Stripe webhook endpoint - single handler for all Stripe events.
+    /// Processes events locally and publishes RabbitMQ events for tenancy-service consumption.
     /// </summary>
     [HttpPost("webhook")]
     [AllowAnonymous]
@@ -65,12 +66,13 @@ public class StripeWebhookController : ControllerBase
                     await HandleInvoicePaymentFailed(stripeEvent);
                     break;
 
-                case "customer.subscription.deleted":
-                    await HandleSubscriptionDeleted(stripeEvent);
-                    break;
-
+                case "customer.subscription.created":
                 case "customer.subscription.updated":
                     await HandleSubscriptionUpdated(stripeEvent);
+                    break;
+
+                case "customer.subscription.deleted":
+                    await HandleSubscriptionDeleted(stripeEvent);
                     break;
 
                 default:
@@ -148,6 +150,18 @@ public class StripeWebhookController : ControllerBase
 
         await _context.SaveChangesAsync();
         _logger.LogInformation("Updated license for tenant {TenantId} with Stripe subscription", tenantId);
+
+        // Publish SubscriptionStatusChangedEvent so tenancy-service updates its records
+        if (!string.IsNullOrEmpty(session.SubscriptionId))
+        {
+            await _bus.Publish(new SubscriptionStatusChangedEvent(
+                StripeSubscriptionId: session.SubscriptionId,
+                Status: "active",
+                StripeCustomerId: session.CustomerId,
+                EndedAt: null,
+                OccurredAt: DateTime.UtcNow
+            ));
+        }
     }
 
     private async Task HandleInvoicePaymentSucceeded(Event stripeEvent)
@@ -200,6 +214,18 @@ public class StripeWebhookController : ControllerBase
 
             await _context.SaveChangesAsync();
         }
+
+        // Publish PaymentSucceededEvent so tenancy-service resets retry counts
+        var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;
+        await _bus.Publish(new PaymentSucceededEvent(
+            StripeCustomerId: invoice.CustomerId,
+            StripeSubscriptionId: subscriptionId,
+            StripeInvoiceId: invoice.Id,
+            Amount: invoice.AmountPaid / 100m,
+            Currency: invoice.Currency ?? "brl",
+            OccurredAt: DateTime.UtcNow
+        ));
+        _logger.LogInformation("Published PaymentSucceededEvent for Customer {CustomerId}", invoice.CustomerId);
     }
 
     private async Task HandleInvoicePaymentFailed(Event stripeEvent)
@@ -219,6 +245,18 @@ public class StripeWebhookController : ControllerBase
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
         }
+
+        // Publish PaymentFailedEvent so tenancy-service increments retry count
+        var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;
+        await _bus.Publish(new PaymentFailedEvent(
+            StripeCustomerId: invoice.CustomerId,
+            StripeSubscriptionId: subscriptionId,
+            StripeInvoiceId: invoice.Id,
+            Amount: invoice.AmountDue / 100m,
+            Currency: invoice.Currency ?? "brl",
+            OccurredAt: DateTime.UtcNow
+        ));
+        _logger.LogInformation("Published PaymentFailedEvent for Customer {CustomerId}", invoice.CustomerId);
     }
 
     private async Task HandleSubscriptionDeleted(Event stripeEvent)
@@ -240,6 +278,15 @@ public class StripeWebhookController : ControllerBase
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
         }
+
+        // Publish SubscriptionCancelledEvent so tenancy-service marks subscription inactive
+        await _bus.Publish(new SubscriptionCancelledEvent(
+            StripeSubscriptionId: subscription.Id,
+            StripeCustomerId: subscription.CustomerId,
+            CancelledAt: DateTime.UtcNow,
+            OccurredAt: DateTime.UtcNow
+        ));
+        _logger.LogInformation("Published SubscriptionCancelledEvent for Subscription {SubscriptionId}", subscription.Id);
     }
 
     private async Task HandleSubscriptionUpdated(Event stripeEvent)
@@ -247,8 +294,8 @@ public class StripeWebhookController : ControllerBase
         var subscription = stripeEvent.Data.Object as Subscription;
         if (subscription == null) return;
 
-        _logger.LogInformation("Subscription updated: {SubscriptionId}, Status: {Status}",
-            subscription.Id, subscription.Status);
+        _logger.LogInformation("Subscription {EventType}: {SubscriptionId}, Status: {Status}",
+            stripeEvent.Type, subscription.Id, subscription.Status);
 
         var license = await _context.TenantLicenses
             .FirstOrDefaultAsync(l => l.StripeSubscriptionId == subscription.Id);
@@ -272,16 +319,26 @@ public class StripeWebhookController : ControllerBase
 
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-
-            var evt = new SubscriptionStatusChangedEvent(
-                StripeSubscriptionId: subscription.Id,
-                Status: newStatus,
-                StripeCustomerId: subscription.CustomerId,
-                EndedAt: subscription.EndedAt,
-                OccurredAt: DateTime.UtcNow
-            );
-            await _bus.Publish(evt);
-            _logger.LogInformation("Published SubscriptionStatusChangedEvent for Subscription {SubscriptionId}", subscription.Id);
         }
+
+        // Publish SubscriptionStatusChangedEvent so tenancy-service updates its records
+        var mappedStatus = subscription.Status switch
+        {
+            "active" => "active",
+            "past_due" => "past_due",
+            "canceled" => "cancelled",
+            "unpaid" => "payment_failed",
+            "trialing" => "trial",
+            _ => subscription.Status
+        };
+
+        await _bus.Publish(new SubscriptionStatusChangedEvent(
+            StripeSubscriptionId: subscription.Id,
+            Status: mappedStatus,
+            StripeCustomerId: subscription.CustomerId,
+            EndedAt: subscription.EndedAt,
+            OccurredAt: DateTime.UtcNow
+        ));
+        _logger.LogInformation("Published SubscriptionStatusChangedEvent for Subscription {SubscriptionId}", subscription.Id);
     }
 }
