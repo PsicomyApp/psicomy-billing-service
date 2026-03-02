@@ -14,6 +14,7 @@ public class BillingDbContext : DbContext
     public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
     public DbSet<StudentVerification> StudentVerifications => Set<StudentVerification>();
     public DbSet<ProcessedStripeEvent> ProcessedStripeEvents => Set<ProcessedStripeEvent>();
+    public DbSet<SentTrialReminder> SentTrialReminders => Set<SentTrialReminder>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -71,6 +72,14 @@ public class BillingDbContext : DbContext
             builder.HasOne(e => e.License)
                 .WithMany()
                 .HasForeignKey(e => e.LicenseId);
+        });
+
+        modelBuilder.Entity<SentTrialReminder>(builder =>
+        {
+            builder.ToTable("SentTrialReminders");
+            builder.HasKey(e => e.Id);
+            builder.HasIndex(e => new { e.LicenseId, e.MilestoneDay }).IsUnique();
+            builder.Property(e => e.TenantId).HasMaxLength(200);
         });
 
         modelBuilder.Entity<StudentVerification>(builder =>

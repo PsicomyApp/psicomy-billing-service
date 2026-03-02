@@ -99,6 +99,9 @@ try
     // Billing metrics
     builder.Services.AddSingleton<BillingMetrics>();
 
+    // Background workers
+    builder.Services.AddHostedService<Psicomy.Services.Billing.Workers.TrialReminderWorker>();
+
     // Health checks
     builder.Services.AddHealthChecks()
         .AddNpgSql(connectionString ?? "", name: "database", tags: new[] { "ready" })

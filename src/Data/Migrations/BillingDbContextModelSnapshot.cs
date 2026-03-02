@@ -247,6 +247,34 @@ namespace Psicomy.Services.Billing.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Psicomy.Services.Billing.Models.SentTrialReminder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("LicenseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("MilestoneDay")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LicenseId", "MilestoneDay")
+                        .IsUnique();
+
+                    b.ToTable("SentTrialReminders", (string)null);
+                });
+
             modelBuilder.Entity("Psicomy.Services.Billing.Models.ProcessedStripeEvent", b =>
                 {
                     b.Property<string>("EventId")
