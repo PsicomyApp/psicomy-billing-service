@@ -50,6 +50,7 @@ public class BillingDbContext : DbContext
             builder.Property(e => e.MonthlyPrice).HasPrecision(18, 2);
             builder.Property(e => e.YearlyPrice).HasPrecision(18, 2);
             builder.Property(e => e.ExtraSeatPrice).HasPrecision(18, 2);
+            builder.Property(e => e.ConnectFeePercent).HasPrecision(5, 2);
             builder.Property(e => e.StripeProductId).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdMonthly).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdYearly).HasMaxLength(100);
@@ -173,6 +174,7 @@ public class BillingDbContext : DbContext
                 YearlyPrice = 2999.00m,
                 MaxUsers = 15,
                 IncludedUsers = 15,
+                ConnectFeePercent = 8m,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4Ua8DaFYi3dWwblNmhEDm8",
                 StripePriceIdYearly = "price_1T4Ua9DaFYi3dWwbgi1r39EL",
@@ -190,6 +192,7 @@ public class BillingDbContext : DbContext
                 MaxUsers = -1, // Soft limit: 15 included + R$35/extra
                 IncludedUsers = 15,
                 ExtraSeatPrice = 35m,
+                ConnectFeePercent = 8m,
                 IsActive = true,
                 StripePriceIdMonthly = "price_1T4UaADaFYi3dWwbzSmmgMOq",
                 StripePriceIdYearly = "price_1T4UaBDaFYi3dWwbzP5ZV6yn",

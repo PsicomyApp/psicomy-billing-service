@@ -147,6 +147,25 @@ public class StripeController : ControllerBase
                 CustomerEmail = User.FindFirst("email")?.Value
             };
 
+            // Stripe Connect: apply application fee and transfer for EnterprisePro/EnterprisePlus
+            if ((plan.Tier == "EnterprisePro" || plan.Tier == "EnterprisePlus") &&
+                !string.IsNullOrEmpty(_stripeOptions.DestinationId))
+            {
+                var feePercent = plan.ConnectFeePercent ?? _stripeOptions.ApplicationFeePercent;
+                options.SubscriptionData = new SessionSubscriptionDataOptions
+                {
+                    ApplicationFeePercent = feePercent,
+                    TransferData = new SessionSubscriptionDataTransferDataOptions
+                    {
+                        Destination = _stripeOptions.DestinationId
+                    }
+                };
+
+                _logger.LogInformation(
+                    "Stripe Connect enabled for plan {PlanTier}: fee {FeePercent}%, destination {Destination}",
+                    plan.Tier, feePercent, _stripeOptions.DestinationId);
+            }
+
             var service = new SessionService();
             var session = await service.CreateAsync(options);
 

@@ -8,6 +8,14 @@ public class StripeOptions
     public string PublishableKey { get; set; } = string.Empty;
     public string WebhookSecret { get; set; } = string.Empty;
     public string DestinationId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Default Stripe Connect application fee percentage (range: 5-10%).
+    /// Can be overridden per-plan via PaymentPlan.ConnectFeePercent.
+    /// Set via STRIPE_CONNECT_FEE_PERCENT environment variable. Default: 8%.
+    /// </summary>
+    public decimal ApplicationFeePercent { get; set; } = 8m;
+
     public string? ApiVersion { get; set; }
     public int TimeoutSeconds { get; set; } = 30;
     public int MaxRetries { get; set; } = 3;

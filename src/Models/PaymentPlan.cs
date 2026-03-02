@@ -34,6 +34,12 @@ public class PaymentPlan
     /// </summary>
     public decimal? ExtraSeatPrice { get; set; }
 
+    /// <summary>
+    /// Stripe Connect application fee percentage for this plan (e.g. 8.0 = 8%).
+    /// Only applicable for EnterprisePro and EnterprisePlus plans.
+    /// </summary>
+    public decimal? ConnectFeePercent { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

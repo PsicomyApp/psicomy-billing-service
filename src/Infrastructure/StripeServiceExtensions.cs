@@ -21,6 +21,10 @@ public static class StripeServiceExtensions
         if (string.IsNullOrEmpty(stripeOptions.DestinationId))
             stripeOptions.DestinationId = Environment.GetEnvironmentVariable("STRIPE_DESTINATION_ID") ?? string.Empty;
 
+        var connectFeePercent = Environment.GetEnvironmentVariable("STRIPE_CONNECT_FEE_PERCENT");
+        if (!string.IsNullOrEmpty(connectFeePercent) && decimal.TryParse(connectFeePercent, out var feePercent))
+            stripeOptions.ApplicationFeePercent = Math.Clamp(feePercent, 5m, 10m);
+
         var seedProducts = Environment.GetEnvironmentVariable("STRIPE_SEED_PRODUCTS");
         if (!string.IsNullOrEmpty(seedProducts))
             stripeOptions.SeedProducts = string.Equals(seedProducts, "true", StringComparison.OrdinalIgnoreCase);
