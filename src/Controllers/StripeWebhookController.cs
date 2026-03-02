@@ -208,6 +208,9 @@ public class StripeWebhookController : ControllerBase
             license.Status = "active";
             license.LastPaymentDate = DateTime.UtcNow;
             license.UpdatedAt = DateTime.UtcNow;
+            license.PaymentRetryCount = 0;
+            license.LastPaymentError = null;
+            license.GracePeriodEndsAt = null;
 
             if (invoice.PeriodEnd != default)
                 license.ExpiresAt = invoice.PeriodEnd.AddDays(3);
@@ -265,9 +268,36 @@ public class StripeWebhookController : ControllerBase
 
         if (license != null)
         {
-            license.Status = "payment_failed";
+            license.PaymentRetryCount += 1;
+            license.LastPaymentError = license.PaymentRetryCount > 1
+                ? $"Payment failed after {license.PaymentRetryCount} attempts."
+                : "Payment failed on Stripe.";
             license.UpdatedAt = DateTime.UtcNow;
+
+            // Set grace period on first failure
+            if (license.GracePeriodEndsAt == null)
+            {
+                var graceDays = _stripeOptions.GracePeriodDays;
+                license.GracePeriodEndsAt = (license.ExpiresAt ?? DateTime.UtcNow).AddDays(graceDays);
+            }
+
+            // During grace period: keep active with past_due status
+            if (DateTime.UtcNow < license.GracePeriodEndsAt)
+            {
+                license.Status = "past_due";
+                // IsActive remains true - full read+write access
+            }
+            else
+            {
+                // Grace period expired: restrict to read-only (suspended)
+                license.Status = "suspended";
+            }
+
             await _context.SaveChangesAsync();
+
+            _logger.LogWarning(
+                "License {LicenseId} payment failed. Retry: {RetryCount}, GracePeriodEnds: {GracePeriodEnds}, Status: {Status}",
+                license.Id, license.PaymentRetryCount, license.GracePeriodEndsAt, license.Status);
         }
 
         var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;

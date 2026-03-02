@@ -25,6 +25,10 @@ public class TenantLicense
     public DateTime? LastPaymentDate { get; set; }
     public DateTime? CancelledAt { get; set; }
 
+    public int PaymentRetryCount { get; set; }
+    public string? LastPaymentError { get; set; }
+    public DateTime? GracePeriodEndsAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

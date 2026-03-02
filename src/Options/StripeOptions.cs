@@ -21,6 +21,12 @@ public class StripeOptions
     public int MaxRetries { get; set; } = 3;
 
     /// <summary>
+    /// Number of days after license ExpiresAt before full deactivation.
+    /// Set via BILLING_GRACE_PERIOD_DAYS environment variable. Default: 10.
+    /// </summary>
+    public int GracePeriodDays { get; set; } = 10;
+
+    /// <summary>
     /// When true, creates Stripe Products and Prices on startup for plans that don't have them yet.
     /// Set via STRIPE_SEED_PRODUCTS environment variable.
     /// </summary>

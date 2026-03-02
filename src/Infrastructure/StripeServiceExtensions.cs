@@ -25,6 +25,10 @@ public static class StripeServiceExtensions
         if (!string.IsNullOrEmpty(connectFeePercent) && decimal.TryParse(connectFeePercent, out var feePercent))
             stripeOptions.ApplicationFeePercent = Math.Clamp(feePercent, 5m, 10m);
 
+        var gracePeriodDays = Environment.GetEnvironmentVariable("BILLING_GRACE_PERIOD_DAYS");
+        if (!string.IsNullOrEmpty(gracePeriodDays) && int.TryParse(gracePeriodDays, out var days))
+            stripeOptions.GracePeriodDays = Math.Max(days, 1);
+
         var seedProducts = Environment.GetEnvironmentVariable("STRIPE_SEED_PRODUCTS");
         if (!string.IsNullOrEmpty(seedProducts))
             stripeOptions.SeedProducts = string.Equals(seedProducts, "true", StringComparison.OrdinalIgnoreCase);

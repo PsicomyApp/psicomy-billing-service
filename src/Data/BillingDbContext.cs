@@ -36,6 +36,8 @@ public class BillingDbContext : DbContext
             builder.HasIndex(e => e.StripeSubscriptionId);
             builder.HasIndex(e => new { e.TenantId, e.IsActive });
 
+            builder.Property(e => e.LastPaymentError).HasMaxLength(500);
+
             builder.HasOne(e => e.Plan)
                 .WithMany(p => p.Licenses)
                 .HasForeignKey(e => e.PlanId);

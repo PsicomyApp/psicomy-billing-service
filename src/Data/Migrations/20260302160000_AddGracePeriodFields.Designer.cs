@@ -11,9 +11,10 @@ using Psicomy.Services.Billing.Data;
 namespace Psicomy.Services.Billing.Data.Migrations
 {
     [DbContext(typeof(BillingDbContext))]
-    partial class BillingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260302160000_AddGracePeriodFields")]
+    partial class AddGracePeriodFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
