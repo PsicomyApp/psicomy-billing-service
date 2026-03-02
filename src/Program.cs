@@ -1,8 +1,10 @@
 using Amazon.S3;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
 using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
+using Psicomy.Services.Billing.Infrastructure.HealthChecks;
 using Psicomy.Services.Billing.Middleware;
 using Psicomy.Services.Billing.Options;
 using Psicomy.Shared.Kernel.Messaging;
@@ -35,6 +37,8 @@ try
     if (shouldUseOtel)
     {
         builder.Services.AddPsicomyOpenTelemetry(builder.Configuration, serviceName);
+        builder.Services.ConfigureOpenTelemetryMeterProvider(mp =>
+            mp.AddMeter(BillingMetrics.MeterName));
     }
     
     // Add services
@@ -92,9 +96,14 @@ try
         });
     });
 
+    // Billing metrics
+    builder.Services.AddSingleton<BillingMetrics>();
+
     // Health checks
     builder.Services.AddHealthChecks()
-        .AddNpgSql(connectionString ?? "", name: "database");
+        .AddNpgSql(connectionString ?? "", name: "database", tags: new[] { "ready" })
+        .AddCheck<StripeHealthCheck>("stripe", tags: new[] { "ready" })
+        .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: new[] { "ready" });
 
     var app = builder.Build();
 
@@ -129,6 +138,11 @@ try
     app.UseAuthorization();
 
     app.MapControllers();
+
+    app.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        Predicate = _ => true
+    });
 
     app.MapHealthChecks("/health/live", new HealthCheckOptions
     {

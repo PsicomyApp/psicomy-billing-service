@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Psicomy.Services.Billing.Data;
+using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
 using Psicomy.Services.Billing.Models;
 using Psicomy.Services.Billing.Options;
@@ -20,17 +21,20 @@ public class StripeWebhookController : ControllerBase
     private readonly BillingDbContext _context;
     private readonly ILogger<StripeWebhookController> _logger;
     private readonly IBus _bus;
+    private readonly BillingMetrics _metrics;
 
     public StripeWebhookController(
         Microsoft.Extensions.Options.IOptions<StripeOptions> stripeOptions,
         BillingDbContext context,
         ILogger<StripeWebhookController> logger,
-        IBus bus)
+        IBus bus,
+        BillingMetrics metrics)
     {
         _stripeOptions = stripeOptions.Value;
         _context = context;
         _logger = logger;
         _bus = bus;
+        _metrics = metrics;
     }
 
     /// <summary>
@@ -102,6 +106,8 @@ public class StripeWebhookController : ControllerBase
                 });
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                _metrics.RecordWebhookProcessed(stripeEvent.Type);
             }
             catch
             {
@@ -298,6 +304,8 @@ public class StripeWebhookController : ControllerBase
             _logger.LogWarning(
                 "License {LicenseId} payment failed. Retry: {RetryCount}, GracePeriodEnds: {GracePeriodEnds}, Status: {Status}",
                 license.Id, license.PaymentRetryCount, license.GracePeriodEndsAt, license.Status);
+
+            _metrics.RecordPaymentFailure(license.TenantId);
         }
 
         var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;
@@ -380,6 +388,8 @@ public class StripeWebhookController : ControllerBase
             "trialing" => "trial",
             _ => subscription.Status
         };
+
+        _metrics.RecordSubscriptionChange(mappedStatus);
 
         await _bus.Publish(new SubscriptionStatusChangedEvent(
             StripeSubscriptionId: subscription.Id,

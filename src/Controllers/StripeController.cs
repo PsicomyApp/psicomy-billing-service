@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Psicomy.Services.Billing.Data;
+using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
 using Psicomy.Services.Billing.Options;
 using Psicomy.Shared.Kernel.Messaging.Events;
@@ -21,17 +22,20 @@ public class StripeController : ControllerBase
     private readonly BillingDbContext _context;
     private readonly ILogger<StripeController> _logger;
     private readonly IBus _bus;
+    private readonly BillingMetrics _metrics;
 
     public StripeController(
         IOptions<StripeOptions> stripeOptions,
         BillingDbContext context,
         ILogger<StripeController> logger,
-        IBus bus)
+        IBus bus,
+        BillingMetrics metrics)
     {
         _stripeOptions = stripeOptions.Value;
         _context = context;
         _logger = logger;
         _bus = bus;
+        _metrics = metrics;
     }
 
     /// <summary>
@@ -172,6 +176,7 @@ public class StripeController : ControllerBase
             var service = new SessionService();
             var session = await service.CreateAsync(options);
 
+            _metrics.RecordCheckoutSessionCreated(plan.Tier);
             _logger.LogInformation("Created checkout session {SessionId} for tenant {TenantId}, plan {PlanId}, period {Period}",
                 session.Id, tenantId, plan.Id, request.Period);
 
