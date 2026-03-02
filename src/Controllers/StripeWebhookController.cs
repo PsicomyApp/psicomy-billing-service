@@ -237,9 +237,10 @@ public class StripeWebhookController : ControllerBase
             try
             {
                 var payment = invoice.Payments?.FirstOrDefault(p => p.Status == "paid");
-                var pmTypes = payment?.Payment?.PaymentMethodDetails;
-                if (pmTypes?.Card != null) paymentMethodType = "card";
-                else if (pmTypes?.Pix != null) paymentMethodType = "pix";
+                var pmType = payment?.Payment?.Charge?.PaymentMethodDetails?.Type;
+                if (pmType == "card") paymentMethodType = "card";
+                else if (pmType == "pix") paymentMethodType = "pix";
+                else if (pmType != null) paymentMethodType = pmType;
             }
             catch
             {
