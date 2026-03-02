@@ -144,7 +144,10 @@ public class StripeController : ControllerBase
                     { "plan_id", plan.Id.ToString() },
                     { "period", request.Period ?? "monthly" }
                 },
-                CustomerEmail = User.FindFirst("email")?.Value
+                CustomerEmail = User.FindFirst("email")?.Value,
+                AutomaticTax = new SessionAutomaticTaxOptions { Enabled = true },
+                CustomerCreation = "always",
+                TaxIdCollection = new SessionTaxIdCollectionOptions { Enabled = true }
             };
 
             // Stripe Connect: apply application fee and transfer for EnterprisePro/EnterprisePlus
