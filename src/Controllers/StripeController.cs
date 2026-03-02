@@ -139,6 +139,7 @@ public class StripeController : ControllerBase
             var options = new SessionCreateOptions
             {
                 Mode = "subscription",
+                PaymentMethodTypes = new List<string> { "card", "pix" },
                 LineItems = lineItems,
                 SuccessUrl = request.SuccessUrl ?? $"{frontendUrl}/dashboard?payment=success",
                 CancelUrl = request.CancelUrl ?? $"{frontendUrl}/upgrade?payment=cancelled",

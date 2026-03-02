@@ -68,6 +68,7 @@ public class BillingDbContext : DbContext
             builder.HasIndex(e => e.StripeInvoiceId);
             builder.Property(e => e.Amount).HasPrecision(18, 2);
             builder.Property(e => e.Currency).HasMaxLength(3);
+            builder.Property(e => e.PaymentMethodType).HasMaxLength(20);
 
             builder.HasOne(e => e.License)
                 .WithMany()

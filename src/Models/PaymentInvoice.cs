@@ -14,6 +14,8 @@ public class PaymentInvoice
     public string Currency { get; set; } = "brl";
     public string Status { get; set; } = "pending";
 
+    public string? PaymentMethodType { get; set; }
+
     public DateTime? PaidAt { get; set; }
     public DateTime? DueDate { get; set; }
 

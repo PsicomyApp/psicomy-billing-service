@@ -232,6 +232,20 @@ public class StripeWebhookController : ControllerBase
                 // PaymentIntentId might not be available in all Stripe API versions
             }
 
+            // Extract payment method type (card, pix, etc.)
+            string? paymentMethodType = null;
+            try
+            {
+                var payment = invoice.Payments?.FirstOrDefault(p => p.Status == "paid");
+                var pmTypes = payment?.Payment?.PaymentMethodDetails;
+                if (pmTypes?.Card != null) paymentMethodType = "card";
+                else if (pmTypes?.Pix != null) paymentMethodType = "pix";
+            }
+            catch
+            {
+                // Payment method type extraction is best-effort
+            }
+
             var paymentInvoice = new PaymentInvoice
             {
                 Id = Guid.NewGuid(),
@@ -239,6 +253,7 @@ public class StripeWebhookController : ControllerBase
                 LicenseId = license.Id,
                 StripeInvoiceId = invoice.Id,
                 StripePaymentIntentId = paymentIntentId,
+                PaymentMethodType = paymentMethodType,
                 Amount = invoice.AmountPaid / 100m,
                 Currency = invoice.Currency,
                 Status = "paid",
