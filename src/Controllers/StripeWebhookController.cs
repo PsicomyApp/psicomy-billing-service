@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Middleware;
+using Psicomy.Services.Billing.Models;
 using Psicomy.Services.Billing.Options;
 using Psicomy.Shared.Kernel.Messaging.Events;
 using Rebus.Bus;
@@ -34,6 +35,7 @@ public class StripeWebhookController : ControllerBase
 
     /// <summary>
     /// Consolidated Stripe webhook endpoint - single handler for all Stripe events.
+    /// Idempotent: duplicate events are detected and skipped.
     /// Processes events locally and publishes RabbitMQ events for tenancy-service consumption.
     /// </summary>
     [HttpPost("webhook")]
@@ -52,32 +54,59 @@ public class StripeWebhookController : ControllerBase
 
             _logger.LogInformation("Stripe webhook received: {EventType} ({EventId})", stripeEvent.Type, stripeEvent.Id);
 
-            switch (stripeEvent.Type)
+            // Idempotency check: skip if already processed
+            if (await _context.ProcessedStripeEvents.AnyAsync(e => e.EventId == stripeEvent.Id))
             {
-                case "checkout.session.completed":
-                    await HandleCheckoutSessionCompleted(stripeEvent);
-                    break;
+                _logger.LogInformation("Duplicate Stripe event skipped: {EventType} ({EventId})", stripeEvent.Type, stripeEvent.Id);
+                return Ok(new { received = true });
+            }
 
-                case "invoice.payment_succeeded":
-                    await HandleInvoicePaymentSucceeded(stripeEvent);
-                    break;
+            // Process event within a transaction for atomicity
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                switch (stripeEvent.Type)
+                {
+                    case "checkout.session.completed":
+                        await HandleCheckoutSessionCompleted(stripeEvent);
+                        break;
 
-                case "invoice.payment_failed":
-                    await HandleInvoicePaymentFailed(stripeEvent);
-                    break;
+                    case "invoice.payment_succeeded":
+                        await HandleInvoicePaymentSucceeded(stripeEvent);
+                        break;
 
-                case "customer.subscription.created":
-                case "customer.subscription.updated":
-                    await HandleSubscriptionUpdated(stripeEvent);
-                    break;
+                    case "invoice.payment_failed":
+                        await HandleInvoicePaymentFailed(stripeEvent);
+                        break;
 
-                case "customer.subscription.deleted":
-                    await HandleSubscriptionDeleted(stripeEvent);
-                    break;
+                    case "customer.subscription.created":
+                    case "customer.subscription.updated":
+                        await HandleSubscriptionUpdated(stripeEvent);
+                        break;
 
-                default:
-                    _logger.LogInformation("Unhandled Stripe event type: {EventType}", stripeEvent.Type);
-                    break;
+                    case "customer.subscription.deleted":
+                        await HandleSubscriptionDeleted(stripeEvent);
+                        break;
+
+                    default:
+                        _logger.LogInformation("Unhandled Stripe event type: {EventType}", stripeEvent.Type);
+                        break;
+                }
+
+                // Record the event as processed within the same transaction
+                _context.ProcessedStripeEvents.Add(new ProcessedStripeEvent
+                {
+                    EventId = stripeEvent.Id,
+                    EventType = stripeEvent.Type,
+                    ProcessedAt = DateTime.UtcNow
+                });
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
             }
 
             return Ok(new { received = true });
@@ -130,7 +159,7 @@ public class StripeWebhookController : ControllerBase
         }
         else
         {
-            license = new Models.TenantLicense
+            license = new TenantLicense
             {
                 Id = Guid.NewGuid(),
                 TenantId = tenantId,
@@ -151,7 +180,6 @@ public class StripeWebhookController : ControllerBase
         await _context.SaveChangesAsync();
         _logger.LogInformation("Updated license for tenant {TenantId} with Stripe subscription", tenantId);
 
-        // Publish SubscriptionStatusChangedEvent so tenancy-service updates its records
         if (!string.IsNullOrEmpty(session.SubscriptionId))
         {
             await _bus.Publish(new SubscriptionStatusChangedEvent(
@@ -184,7 +212,6 @@ public class StripeWebhookController : ControllerBase
             if (invoice.PeriodEnd != default)
                 license.ExpiresAt = invoice.PeriodEnd.AddDays(3);
 
-            // Extract PaymentIntentId from the invoice
             string? paymentIntentId = null;
             try
             {
@@ -193,10 +220,10 @@ public class StripeWebhookController : ControllerBase
             }
             catch
             {
-                // Fallback: PaymentIntentId might not be available in all Stripe API versions
+                // PaymentIntentId might not be available in all Stripe API versions
             }
 
-            var paymentInvoice = new Models.PaymentInvoice
+            var paymentInvoice = new PaymentInvoice
             {
                 Id = Guid.NewGuid(),
                 TenantId = license.TenantId,
@@ -211,11 +238,9 @@ public class StripeWebhookController : ControllerBase
                 UpdatedAt = DateTime.UtcNow
             };
             _context.PaymentInvoices.Add(paymentInvoice);
-
             await _context.SaveChangesAsync();
         }
 
-        // Publish PaymentSucceededEvent so tenancy-service resets retry counts
         var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;
         await _bus.Publish(new PaymentSucceededEvent(
             StripeCustomerId: invoice.CustomerId,
@@ -225,7 +250,6 @@ public class StripeWebhookController : ControllerBase
             Currency: invoice.Currency ?? "brl",
             OccurredAt: DateTime.UtcNow
         ));
-        _logger.LogInformation("Published PaymentSucceededEvent for Customer {CustomerId}", invoice.CustomerId);
     }
 
     private async Task HandleInvoicePaymentFailed(Event stripeEvent)
@@ -246,7 +270,6 @@ public class StripeWebhookController : ControllerBase
             await _context.SaveChangesAsync();
         }
 
-        // Publish PaymentFailedEvent so tenancy-service increments retry count
         var subscriptionId = invoice.Lines?.Data?.FirstOrDefault()?.SubscriptionId;
         await _bus.Publish(new PaymentFailedEvent(
             StripeCustomerId: invoice.CustomerId,
@@ -256,7 +279,6 @@ public class StripeWebhookController : ControllerBase
             Currency: invoice.Currency ?? "brl",
             OccurredAt: DateTime.UtcNow
         ));
-        _logger.LogInformation("Published PaymentFailedEvent for Customer {CustomerId}", invoice.CustomerId);
     }
 
     private async Task HandleSubscriptionDeleted(Event stripeEvent)
@@ -279,14 +301,12 @@ public class StripeWebhookController : ControllerBase
             await _context.SaveChangesAsync();
         }
 
-        // Publish SubscriptionCancelledEvent so tenancy-service marks subscription inactive
         await _bus.Publish(new SubscriptionCancelledEvent(
             StripeSubscriptionId: subscription.Id,
             StripeCustomerId: subscription.CustomerId,
             CancelledAt: DateTime.UtcNow,
             OccurredAt: DateTime.UtcNow
         ));
-        _logger.LogInformation("Published SubscriptionCancelledEvent for Subscription {SubscriptionId}", subscription.Id);
     }
 
     private async Task HandleSubscriptionUpdated(Event stripeEvent)
@@ -321,7 +341,6 @@ public class StripeWebhookController : ControllerBase
             await _context.SaveChangesAsync();
         }
 
-        // Publish SubscriptionStatusChangedEvent so tenancy-service updates its records
         var mappedStatus = subscription.Status switch
         {
             "active" => "active",
@@ -339,6 +358,5 @@ public class StripeWebhookController : ControllerBase
             EndedAt: subscription.EndedAt,
             OccurredAt: DateTime.UtcNow
         ));
-        _logger.LogInformation("Published SubscriptionStatusChangedEvent for Subscription {SubscriptionId}", subscription.Id);
     }
 }

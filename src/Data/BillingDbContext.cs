@@ -13,10 +13,19 @@ public class BillingDbContext : DbContext
     public DbSet<PaymentPlan> PaymentPlans => Set<PaymentPlan>();
     public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
     public DbSet<StudentVerification> StudentVerifications => Set<StudentVerification>();
+    public DbSet<ProcessedStripeEvent> ProcessedStripeEvents => Set<ProcessedStripeEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<ProcessedStripeEvent>(builder =>
+        {
+            builder.ToTable("ProcessedStripeEvents");
+            builder.HasKey(e => e.EventId);
+            builder.Property(e => e.EventId).HasMaxLength(255);
+            builder.Property(e => e.EventType).HasMaxLength(100);
+        });
 
         modelBuilder.Entity<TenantLicense>(builder =>
         {
