@@ -8,23 +8,23 @@ using Psicomy.Services.Billing.Models;
 namespace Psicomy.Services.Billing.Controllers;
 
 [ApiController]
-[Route("api/stripe/student-verification")]
+[Route("api/stripe/academic-verification")]
 [Authorize]
-public class StudentVerificationController : ControllerBase
+public class AcademicVerificationController : ControllerBase
 {
     private readonly BillingDbContext _context;
     private readonly IStorageService _storageService;
-    private readonly ILogger<StudentVerificationController> _logger;
+    private readonly ILogger<AcademicVerificationController> _logger;
 
     private static readonly string[] AllowedContentTypes = { "application/pdf", "image/jpeg", "image/png", "image/webp" };
     private const long MaxFileSizeBytes = 10 * 1024 * 1024; // 10 MB
     private const int MaxRejectionsPerMonth = 3;
     private const int BlockDurationDays = 30;
 
-    public StudentVerificationController(
+    public AcademicVerificationController(
         BillingDbContext context,
         IStorageService storageService,
-        ILogger<StudentVerificationController> logger)
+        ILogger<AcademicVerificationController> logger)
     {
         _context = context;
         _storageService = storageService;
@@ -32,10 +32,10 @@ public class StudentVerificationController : ControllerBase
     }
 
     /// <summary>
-    /// Submit student verification with enrollment certificate
+    /// Submit academic eligibility verification with enrollment certificate
     /// </summary>
     [HttpPost("submit")]
-    public async Task<IActionResult> SubmitVerification([FromForm] StudentVerificationRequest request)
+    public async Task<IActionResult> SubmitVerification([FromForm] AcademicVerificationRequest request)
     {
         var userId = User.FindFirst("sub")?.Value ?? User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
         var tenantId = User.FindFirst("tenant")?.Value;
@@ -58,7 +58,7 @@ public class StudentVerificationController : ControllerBase
         }
 
         // Check if there's already a pending verification
-        var pendingVerification = await _context.StudentVerifications
+        var pendingVerification = await _context.AcademicVerifications
             .FirstOrDefaultAsync(v => v.UserId == userId && v.Status == "pending");
 
         if (pendingVerification != null)
@@ -96,17 +96,17 @@ public class StudentVerificationController : ControllerBase
                 stream,
                 request.Document.FileName,
                 request.Document.ContentType,
-                $"student-verifications/{tenantId}/{userId}"
+                $"academic-verifications/{tenantId}/{userId}"
             );
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to upload student verification document");
+            _logger.LogError(ex, "Failed to upload academic verification document");
             return StatusCode(500, new { error = "Erro ao fazer upload do documento" });
         }
 
         // Create verification record
-        var verification = new StudentVerification
+        var verification = new AcademicVerification
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
@@ -126,10 +126,10 @@ public class StudentVerificationController : ControllerBase
             UpdatedAt = DateTime.UtcNow
         };
 
-        _context.StudentVerifications.Add(verification);
+        _context.AcademicVerifications.Add(verification);
         await _context.SaveChangesAsync();
 
-        _logger.LogInformation("Student verification submitted: {VerificationId} for user {UserId}", verification.Id, userId);
+        _logger.LogInformation("Academic verification submitted: {VerificationId} for user {UserId}", verification.Id, userId);
 
         return Ok(new
         {
@@ -153,7 +153,7 @@ public class StudentVerificationController : ControllerBase
         }
 
         // Get latest verification
-        var verification = await _context.StudentVerifications
+        var verification = await _context.AcademicVerifications
             .Where(v => v.UserId == userId)
             .OrderByDescending(v => v.CreatedAt)
             .FirstOrDefaultAsync();
@@ -163,7 +163,7 @@ public class StudentVerificationController : ControllerBase
 
         // Count rejections this month
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var rejectionsThisMonth = await _context.StudentVerifications
+        var rejectionsThisMonth = await _context.AcademicVerifications
             .CountAsync(v => v.UserId == userId && v.Status == "rejected" && v.CreatedAt >= monthStart);
 
         return Ok(new
@@ -200,7 +200,7 @@ public class StudentVerificationController : ControllerBase
             return Unauthorized(new { error = "Invalid token" });
         }
 
-        var verifications = await _context.StudentVerifications
+        var verifications = await _context.AcademicVerifications
             .Where(v => v.UserId == userId)
             .OrderByDescending(v => v.CreatedAt)
             .Select(v => new
@@ -225,7 +225,7 @@ public class StudentVerificationController : ControllerBase
     [Authorize(Roles = "administrador,gestor")]
     public async Task<IActionResult> GetPendingVerifications([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
-        var query = _context.StudentVerifications
+        var query = _context.AcademicVerifications
             .Where(v => v.Status == "pending")
             .OrderBy(v => v.CreatedAt);
 
@@ -250,10 +250,10 @@ public class StudentVerificationController : ControllerBase
     /// </summary>
     [HttpPost("admin/review/{verificationId}")]
     [Authorize(Roles = "administrador,gestor")]
-    public async Task<IActionResult> ReviewVerification(Guid verificationId, [FromBody] ReviewVerificationRequest request)
+    public async Task<IActionResult> ReviewVerification(Guid verificationId, [FromBody] ReviewAcademicVerificationRequest request)
     {
         var reviewerId = User.FindFirst("sub")?.Value;
-        var verification = await _context.StudentVerifications.FindAsync(verificationId);
+        var verification = await _context.AcademicVerifications.FindAsync(verificationId);
 
         if (verification == null)
         {
@@ -275,7 +275,7 @@ public class StudentVerificationController : ControllerBase
         if (!request.Approved)
         {
             var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            var rejectionsThisMonth = await _context.StudentVerifications
+            var rejectionsThisMonth = await _context.AcademicVerifications
                 .CountAsync(v => v.UserId == verification.UserId && v.Status == "rejected" && v.CreatedAt >= monthStart);
 
             if (rejectionsThisMonth >= MaxRejectionsPerMonth)
@@ -288,8 +288,8 @@ public class StudentVerificationController : ControllerBase
         }
         else
         {
-            // If approved, activate student plan license
-            await ActivateStudentPlanAsync(verification.TenantId, verification.UserId);
+            // If approved, activate free academic plan license
+            await ActivateAcademicPlanAsync(verification.TenantId, verification.UserId);
         }
 
         await _context.SaveChangesAsync();
@@ -307,7 +307,7 @@ public class StudentVerificationController : ControllerBase
 
     private async Task<(bool IsBlocked, DateTime? BlockedUntil)> GetBlockStatusAsync(string userId)
     {
-        var blockedVerification = await _context.StudentVerifications
+        var blockedVerification = await _context.AcademicVerifications
             .Where(v => v.UserId == userId && v.IsBlocked && v.BlockedUntil > DateTime.UtcNow)
             .OrderByDescending(v => v.BlockedUntil)
             .FirstOrDefaultAsync();
@@ -319,7 +319,7 @@ public class StudentVerificationController : ControllerBase
 
         // Check rejection count this month
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var rejectionsThisMonth = await _context.StudentVerifications
+        var rejectionsThisMonth = await _context.AcademicVerifications
             .CountAsync(v => v.UserId == userId && v.Status == "rejected" && v.CreatedAt >= monthStart);
 
         if (rejectionsThisMonth >= MaxRejectionsPerMonth)
@@ -330,14 +330,14 @@ public class StudentVerificationController : ControllerBase
         return (false, null);
     }
 
-    private async Task ActivateStudentPlanAsync(string tenantId, string userId)
+    private async Task ActivateAcademicPlanAsync(string tenantId, string userId)
     {
-        var studentPlan = await _context.PaymentPlans
-            .FirstOrDefaultAsync(p => p.Tier == "Student" && p.IsActive);
+        var freePlan = await _context.PaymentPlans
+            .FirstOrDefaultAsync(p => p.Tier == "Free" && p.IsActive);
 
-        if (studentPlan == null)
+        if (freePlan == null)
         {
-            _logger.LogWarning("Student plan not found");
+            _logger.LogWarning("Free plan not found for academic verification");
             return;
         }
 
@@ -346,7 +346,7 @@ public class StudentVerificationController : ControllerBase
 
         if (existingLicense != null)
         {
-            existingLicense.PlanId = studentPlan.Id;
+            existingLicense.PlanId = freePlan.Id;
             existingLicense.UpdatedAt = DateTime.UtcNow;
         }
         else
@@ -355,24 +355,24 @@ public class StudentVerificationController : ControllerBase
             {
                 Id = Guid.NewGuid(),
                 TenantId = tenantId,
-                PlanId = studentPlan.Id,
+                PlanId = freePlan.Id,
                 Status = "active",
                 IsActive = true,
                 LicenseStartDate = DateTime.UtcNow,
                 LicenseEndDate = DateTime.UtcNow.AddYears(1),
                 ExpiresAt = DateTime.UtcNow.AddYears(1),
-                PaymentMethod = "student_verification",
+                PaymentMethod = "academic_verification",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
             _context.TenantLicenses.Add(license);
         }
 
-        _logger.LogInformation("Student plan activated for tenant {TenantId}", tenantId);
+        _logger.LogInformation("Free plan activated via academic verification for tenant {TenantId}", tenantId);
     }
 }
 
-public class StudentVerificationRequest
+public class AcademicVerificationRequest
 {
     public string FullName { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
@@ -383,7 +383,7 @@ public class StudentVerificationRequest
     public IFormFile Document { get; set; } = null!;
 }
 
-public class ReviewVerificationRequest
+public class ReviewAcademicVerificationRequest
 {
     public bool Approved { get; set; }
     public string? RejectionReason { get; set; }

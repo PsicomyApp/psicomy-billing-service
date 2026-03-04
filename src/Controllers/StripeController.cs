@@ -91,9 +91,13 @@ public class StripeController : ControllerBase
         if (plan == null)
             return NotFound(new { error = "Payment plan not found" });
 
-        // Student plan - activate without payment
-        if (plan.Tier == "Student" || plan.MonthlyPrice == 0)
+        // Free plan - activate without payment
+        if (plan.Tier == "Free" || plan.MonthlyPrice == 0)
             return await ActivateFreePlan(tenantId, plan.Id);
+
+        // Enterprise plan - checkout blocked, must contact sales
+        if (plan.Tier == "Enterprise")
+            return BadRequest(new { error = "Enterprise plan requires contacting sales (contato@psicomy.com.br)" });
 
         // Determine which Stripe Price ID to use
         var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
@@ -120,19 +124,21 @@ public class StripeController : ControllerBase
                 }
             };
 
-            // EnterprisePlus: add per-seat addon line item if extra users beyond included
-            if (plan.Tier == "EnterprisePlus" &&
-                !string.IsNullOrEmpty(plan.StripePriceIdPerSeat) &&
-                !isAnnual) // Per-seat addon is monthly; annual plans handle it separately
+            // Per-seat addon line item for Team and Business plans
+            if ((plan.ExtraSeatPrice ?? 0) > 0)
             {
-                var extraSeats = request.ExtraSeats ?? 0;
-                if (extraSeats > 0)
+                var perSeatPriceId = isAnnual ? plan.StripePriceIdPerSeatYearly : plan.StripePriceIdPerSeat;
+                if (!string.IsNullOrEmpty(perSeatPriceId))
                 {
-                    lineItems.Add(new SessionLineItemOptions
+                    var extraSeats = request.ExtraSeats ?? 0;
+                    if (extraSeats > 0)
                     {
-                        Price = plan.StripePriceIdPerSeat,
-                        Quantity = extraSeats
-                    });
+                        lineItems.Add(new SessionLineItemOptions
+                        {
+                            Price = perSeatPriceId,
+                            Quantity = extraSeats
+                        });
+                    }
                 }
             }
 
@@ -155,8 +161,8 @@ public class StripeController : ControllerBase
                 TaxIdCollection = new SessionTaxIdCollectionOptions { Enabled = true }
             };
 
-            // Stripe Connect: apply application fee and transfer for EnterprisePro/EnterprisePlus
-            if ((plan.Tier == "EnterprisePro" || plan.Tier == "EnterprisePlus") &&
+            // Stripe Connect: apply application fee and transfer for Business/Enterprise
+            if ((plan.Tier == "Business" || plan.Tier == "Enterprise") &&
                 !string.IsNullOrEmpty(_stripeOptions.DestinationId))
             {
                 var feePercent = plan.ConnectFeePercent ?? _stripeOptions.ApplicationFeePercent;
@@ -578,12 +584,12 @@ public class StripeController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
-        _logger.LogInformation("Activated free Student plan for tenant {TenantId}", tenantId);
+        _logger.LogInformation("Activated free plan for tenant {TenantId}", tenantId);
 
         return Ok(new
         {
             success = true,
-            message = "Student plan activated successfully",
+            message = "Free plan activated successfully",
             redirectUrl = "/dashboard?plan=activated"
         });
     }

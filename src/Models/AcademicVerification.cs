@@ -1,6 +1,6 @@
 namespace Psicomy.Services.Billing.Models;
 
-public class StudentVerification
+public class AcademicVerification
 {
     public Guid Id { get; set; }
     public string TenantId { get; set; } = string.Empty;

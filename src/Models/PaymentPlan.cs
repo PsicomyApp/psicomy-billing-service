@@ -5,7 +5,7 @@ public class PaymentPlan
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public string Tier { get; set; } = "Student";
+    public string Tier { get; set; } = "Free";
     public decimal MonthlyPrice { get; set; }
     public decimal? YearlyPrice { get; set; }
     public int MaxUsers { get; set; } = 1;
@@ -20,9 +20,14 @@ public class PaymentPlan
     public string? StripePriceIdYearly { get; set; }
 
     /// <summary>
-    /// Stripe Price ID for per-seat addon (EnterprisePlus).
+    /// Stripe Price ID for monthly per-seat addon (Team, Business).
     /// </summary>
     public string? StripePriceIdPerSeat { get; set; }
+
+    /// <summary>
+    /// Stripe Price ID for yearly per-seat addon (Team, Business).
+    /// </summary>
+    public string? StripePriceIdPerSeatYearly { get; set; }
 
     /// <summary>
     /// Number of users included in the base price before per-seat billing.
@@ -30,13 +35,13 @@ public class PaymentPlan
     public int IncludedUsers { get; set; } = 1;
 
     /// <summary>
-    /// Price per extra user seat beyond IncludedUsers (EnterprisePlus).
+    /// Price per extra user seat beyond IncludedUsers (Team, Business).
     /// </summary>
     public decimal? ExtraSeatPrice { get; set; }
 
     /// <summary>
     /// Stripe Connect application fee percentage for this plan (e.g. 8.0 = 8%).
-    /// Only applicable for EnterprisePro and EnterprisePlus plans.
+    /// Only applicable for Business and Enterprise plans.
     /// </summary>
     public decimal? ConnectFeePercent { get; set; }
 

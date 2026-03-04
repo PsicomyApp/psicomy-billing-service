@@ -12,7 +12,7 @@ public class BillingDbContext : DbContext
     public DbSet<TenantLicense> TenantLicenses => Set<TenantLicense>();
     public DbSet<PaymentPlan> PaymentPlans => Set<PaymentPlan>();
     public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
-    public DbSet<StudentVerification> StudentVerifications => Set<StudentVerification>();
+    public DbSet<AcademicVerification> AcademicVerifications => Set<AcademicVerification>();
     public DbSet<ProcessedStripeEvent> ProcessedStripeEvents => Set<ProcessedStripeEvent>();
     public DbSet<SentTrialReminder> SentTrialReminders => Set<SentTrialReminder>();
 
@@ -58,6 +58,7 @@ public class BillingDbContext : DbContext
             builder.Property(e => e.StripePriceIdMonthly).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdYearly).HasMaxLength(100);
             builder.Property(e => e.StripePriceIdPerSeat).HasMaxLength(100);
+            builder.Property(e => e.StripePriceIdPerSeatYearly).HasMaxLength(100);
         });
 
         modelBuilder.Entity<PaymentInvoice>(builder =>
@@ -83,8 +84,9 @@ public class BillingDbContext : DbContext
             builder.Property(e => e.TenantId).HasMaxLength(200);
         });
 
-        modelBuilder.Entity<StudentVerification>(builder =>
+        modelBuilder.Entity<AcademicVerification>(builder =>
         {
+            // Keep table name for backward compatibility with existing migrations
             builder.ToTable("StudentVerifications");
             builder.HasKey(e => e.Id);
             builder.HasIndex(e => e.TenantId);
@@ -115,9 +117,9 @@ public class BillingDbContext : DbContext
             new PaymentPlan
             {
                 Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-                Name = "Student",
-                Description = "Plano gratuito para estudantes",
-                Tier = "Student",
+                Name = "Free",
+                Description = "Plano gratuito para estudantes e teste",
+                Tier = "Free",
                 MonthlyPrice = 0,
                 YearlyPrice = 0,
                 MaxUsers = 1,
@@ -131,83 +133,88 @@ public class BillingDbContext : DbContext
             new PaymentPlan
             {
                 Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
-                Name = "Basic Individual",
+                Name = "Starter",
                 Description = "Plano individual para profissionais",
-                Tier = "BasicIndividual",
-                MonthlyPrice = 39.90m,
-                YearlyPrice = 399.00m,
+                Tier = "Starter",
+                MonthlyPrice = 49.90m,
+                YearlyPrice = 499.00m,
                 MaxUsers = 1,
                 IncludedUsers = 1,
                 IsActive = true,
-                StripePriceIdMonthly = "price_1T4Ua5DaFYi3dWwbt7W5D8z0",
-                StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbXEEPW2Kt",
+                StripePriceIdMonthly = "price_1T7O5mDaFYi3dWwbcdXyvapw",
+                StripePriceIdYearly = "price_1T7O5mDaFYi3dWwbxTFgRKth",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
             new PaymentPlan
             {
                 Id = Guid.Parse("33333333-3333-3333-3333-333333333333"),
-                Name = "Basic Pro",
-                Description = "Plano profissional com financeiro",
-                Tier = "BasicPro",
-                MonthlyPrice = 79.90m,
-                YearlyPrice = 799.00m,
+                Name = "Professional",
+                Description = "Plano profissional com financeiro completo",
+                Tier = "Professional",
+                MonthlyPrice = 99.90m,
+                YearlyPrice = 999.00m,
                 MaxUsers = 1,
                 IncludedUsers = 1,
                 IsActive = true,
-                StripePriceIdMonthly = "price_1T4Ua6DaFYi3dWwbL3RCml0z",
-                StripePriceIdYearly = "price_1T4Ua6DaFYi3dWwbdvNFQSlt",
+                StripePriceIdMonthly = "price_1T7O7xDaFYi3dWwbHRmFTbvY",
+                StripePriceIdYearly = "price_1T7O7xDaFYi3dWwb4374pLpM",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
             new PaymentPlan
             {
                 Id = Guid.Parse("44444444-4444-4444-4444-444444444444"),
-                Name = "Enterprise Basic",
-                Description = "Plano empresarial com multi-usuarios",
-                Tier = "EnterpriseBasic",
-                MonthlyPrice = 159.90m,
-                YearlyPrice = 1599.00m,
-                MaxUsers = 8,
-                IncludedUsers = 8,
+                Name = "Team",
+                Description = "Plano para equipes com multi-usuarios e RBAC",
+                Tier = "Team",
+                MonthlyPrice = 189.90m,
+                YearlyPrice = 1899.00m,
+                MaxUsers = -1,
+                IncludedUsers = 5,
+                ExtraSeatPrice = 49.90m,
                 IsActive = true,
-                StripePriceIdMonthly = "price_1T4Ua7DaFYi3dWwbBpfUi8wT",
-                StripePriceIdYearly = "price_1T4Ua7DaFYi3dWwbE6X3dkJb",
+                StripePriceIdMonthly = "price_1T7O9TDaFYi3dWwbps9e4hNp",
+                StripePriceIdYearly = "price_1T7O9TDaFYi3dWwba9bqw6Rg",
+                StripePriceIdPerSeat = "price_1T7OEeDaFYi3dWwbMSf1uJlb",
+                StripePriceIdPerSeatYearly = "price_1T7OEeDaFYi3dWwbU6gwOjpq",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
             new PaymentPlan
             {
                 Id = Guid.Parse("55555555-5555-5555-5555-555555555555"),
-                Name = "Enterprise Pro",
-                Description = "Plano empresarial completo",
-                Tier = "EnterprisePro",
-                MonthlyPrice = 299.90m,
-                YearlyPrice = 2999.00m,
-                MaxUsers = 15,
+                Name = "Business",
+                Description = "Plano empresarial completo com BI e SLA",
+                Tier = "Business",
+                MonthlyPrice = 349.90m,
+                YearlyPrice = 3499.00m,
+                MaxUsers = -1,
                 IncludedUsers = 15,
+                ExtraSeatPrice = 59.90m,
                 ConnectFeePercent = 8m,
                 IsActive = true,
-                StripePriceIdMonthly = "price_1T4Ua8DaFYi3dWwblNmhEDm8",
-                StripePriceIdYearly = "price_1T4Ua9DaFYi3dWwbgi1r39EL",
+                StripePriceIdMonthly = "price_1T7OAhDaFYi3dWwbncZrUnoq",
+                StripePriceIdYearly = "price_1T7OB5DaFYi3dWwbPSGZQALb",
+                StripePriceIdPerSeat = "price_1T7OEeDaFYi3dWwbJDyAo4w0",
+                StripePriceIdPerSeatYearly = "price_1T7OEeDaFYi3dWwbo0SGFtHz",
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             },
             new PaymentPlan
             {
                 Id = Guid.Parse("66666666-6666-6666-6666-666666666666"),
-                Name = "Enterprise Plus",
-                Description = "Plano empresarial ilimitado com cobranca variavel",
-                Tier = "EnterprisePlus",
-                MonthlyPrice = 349.90m,
-                YearlyPrice = 3499.00m,
-                MaxUsers = -1, // Soft limit: 15 included + R$35/extra
-                IncludedUsers = 15,
-                ExtraSeatPrice = 35m,
+                Name = "Enterprise",
+                Description = "Plano enterprise com white label e gerente dedicado",
+                Tier = "Enterprise",
+                MonthlyPrice = 999.90m,
+                YearlyPrice = 9999.00m,
+                MaxUsers = -1,
+                IncludedUsers = -1,
                 ConnectFeePercent = 8m,
                 IsActive = true,
-                StripePriceIdMonthly = "price_1T4UaADaFYi3dWwbzSmmgMOq",
-                StripePriceIdYearly = "price_1T4UaBDaFYi3dWwbzP5ZV6yn",
+                StripePriceIdMonthly = null,
+                StripePriceIdYearly = null,
                 CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             }

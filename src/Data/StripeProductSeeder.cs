@@ -61,7 +61,7 @@ public class StripeProductSeeder
 
     private async Task SeedPlanAsync(PaymentPlan plan, CancellationToken cancellationToken)
     {
-        // Skip free plans (Student)
+        // Skip free plans (no Stripe product needed)
         if (plan.MonthlyPrice == 0 && (plan.YearlyPrice ?? 0) == 0)
         {
             _logger.LogInformation("Skipping free plan {PlanName}", plan.Name);
@@ -150,9 +150,8 @@ public class StripeProductSeeder
                 yearlyPrice.Id, plan.Name, plan.YearlyPrice);
         }
 
-        // Per-seat addon price (EnterprisePlus only)
-        if (plan.Tier == "EnterprisePlus" &&
-            string.IsNullOrEmpty(plan.StripePriceIdPerSeat) &&
+        // Per-seat addon price (Team and Business plans)
+        if (string.IsNullOrEmpty(plan.StripePriceIdPerSeat) &&
             (plan.ExtraSeatPrice ?? 0) > 0)
         {
             var perSeatPrice = await priceService.CreateAsync(new PriceCreateOptions
@@ -177,6 +176,36 @@ public class StripeProductSeeder
             _logger.LogInformation(
                 "Created per-seat price {PriceId} for {PlanName}: R${Amount}/user/mo (beyond {Included} users)",
                 perSeatPrice.Id, plan.Name, plan.ExtraSeatPrice, plan.IncludedUsers);
+        }
+
+        // Per-seat addon yearly price (Team and Business plans)
+        if (string.IsNullOrEmpty(plan.StripePriceIdPerSeatYearly) &&
+            (plan.ExtraSeatPrice ?? 0) > 0)
+        {
+            var annualSeatPrice = plan.ExtraSeatPrice!.Value * 10; // 10x monthly (2 months free)
+            var perSeatYearlyPrice = await priceService.CreateAsync(new PriceCreateOptions
+            {
+                Product = plan.StripeProductId,
+                UnitAmount = (long)(annualSeatPrice * 100),
+                Currency = "brl",
+                Recurring = new PriceRecurringOptions
+                {
+                    Interval = "year"
+                },
+                Metadata = new Dictionary<string, string>
+                {
+                    { "plan_id", plan.Id.ToString() },
+                    { "tier", plan.Tier },
+                    { "type", "per_seat" },
+                    { "period", "annual" },
+                    { "included_users", plan.IncludedUsers.ToString() }
+                }
+            }, cancellationToken: cancellationToken);
+
+            plan.StripePriceIdPerSeatYearly = perSeatYearlyPrice.Id;
+            _logger.LogInformation(
+                "Created per-seat yearly price {PriceId} for {PlanName}: R${Amount}/user/yr (beyond {Included} users)",
+                perSeatYearlyPrice.Id, plan.Name, annualSeatPrice, plan.IncludedUsers);
         }
 
         plan.UpdatedAt = DateTime.UtcNow;
