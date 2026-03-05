@@ -42,7 +42,7 @@
     <ProjectReference Include="..\..\psicomy-shared-kernel\src\Psicomy.Shared.Kernel.csproj" />
   </ItemGroup>
   <ItemGroup Condition="!Exists('..\..\psicomy-shared-kernel\src\Psicomy.Shared.Kernel.csproj')">
-    <PackageReference Include="Psicomy.Shared.Kernel" Version="1.7.10" />
+    <PackageReference Include="Psicomy.Shared.Kernel" Version="1.7.12" />
   </ItemGroup>
 
 </Project>
