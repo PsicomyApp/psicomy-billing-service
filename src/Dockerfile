@@ -18,12 +18,15 @@ RUN dotnet publish "Psicomy.Services.Billing.csproj" -c Release -o /app/publish 
 
 FROM base AS final
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/publish .
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=5 \
     CMD curl --fail http://localhost:8080/health/live || exit 1
 
 ENTRYPOINT ["dotnet", "Psicomy.Services.Billing.dll"]
