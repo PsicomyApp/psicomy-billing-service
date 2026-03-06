@@ -8,6 +8,8 @@ public class StripeOptions
     public string PublishableKey { get; set; } = string.Empty;
     public string WebhookSecret { get; set; } = string.Empty;
     public string DestinationId { get; set; } = string.Empty;
+    public string DefaultFrontendUrl { get; set; } = "https://psicomy.com.br";
+    public string[] AllowedRedirectHosts { get; set; } = [];
 
     /// <summary>
     /// Default Stripe Connect application fee percentage (range: 5-10%).

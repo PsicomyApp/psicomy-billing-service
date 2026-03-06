@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Psicomy.Services.Billing.Data;
 using Psicomy.Services.Billing.Infrastructure;
 using Psicomy.Services.Billing.Middleware;
@@ -46,13 +47,26 @@ public class StripeWebhookController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> HandleWebhook()
     {
+        if (string.IsNullOrWhiteSpace(_stripeOptions.WebhookSecret))
+        {
+            _logger.LogError("Stripe webhook secret is not configured.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Stripe webhook is not configured" });
+        }
+
+        var signatureHeader = Request.Headers["Stripe-Signature"].ToString();
+        if (string.IsNullOrWhiteSpace(signatureHeader))
+        {
+            _logger.LogWarning("Stripe webhook request missing Stripe-Signature header");
+            return BadRequest(new { error = "Missing Stripe-Signature header" });
+        }
+
         var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
 
         try
         {
             var stripeEvent = EventUtility.ConstructEvent(
                 json,
-                Request.Headers["Stripe-Signature"],
+                signatureHeader,
                 _stripeOptions.WebhookSecret
             );
 
@@ -92,6 +106,10 @@ public class StripeWebhookController : ControllerBase
                         await HandleSubscriptionDeleted(stripeEvent);
                         break;
 
+                    case "charge.refunded":
+                        await HandleChargeRefunded(stripeEvent);
+                        break;
+
                     default:
                         _logger.LogInformation("Unhandled Stripe event type: {EventType}", stripeEvent.Type);
                         break;
@@ -108,6 +126,14 @@ public class StripeWebhookController : ControllerBase
                 await transaction.CommitAsync();
 
                 _metrics.RecordWebhookProcessed(stripeEvent.Type);
+            }
+            catch (DbUpdateException dbUpdateEx) when (IsDuplicateProcessedEvent(dbUpdateEx))
+            {
+                await transaction.RollbackAsync();
+                _logger.LogInformation(
+                    "Duplicate Stripe event detected during persistence (race condition), skipping: {EventType} ({EventId})",
+                    stripeEvent.Type, stripeEvent.Id);
+                return Ok(new { received = true });
             }
             catch
             {
@@ -153,13 +179,18 @@ public class StripeWebhookController : ControllerBase
         Guid.TryParse(planIdStr, out var planId);
 
         var license = await _context.TenantLicenses
-            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+            .Where(l => l.TenantId == tenantId)
+            .OrderByDescending(l => l.IsActive)
+            .ThenByDescending(l => l.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (license != null)
         {
             license.StripeCustomerId = session.CustomerId;
             license.StripeSubscriptionId = session.SubscriptionId;
             license.Status = "active";
+            license.IsActive = true;
+            license.AutoRenew = true;
             license.UpdatedAt = DateTime.UtcNow;
             if (planId != Guid.Empty) license.PlanId = planId;
         }
@@ -176,6 +207,7 @@ public class StripeWebhookController : ControllerBase
                 IsActive = true,
                 LicenseStartDate = DateTime.UtcNow,
                 LicenseEndDate = DateTime.UtcNow.AddMonths(1),
+                AutoRenew = true,
                 ExpiresAt = DateTime.UtcNow.AddMonths(1).AddDays(3),
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
@@ -207,11 +239,14 @@ public class StripeWebhookController : ControllerBase
             invoice.Id, invoice.CustomerId, invoice.AmountPaid / 100m);
 
         var license = await _context.TenantLicenses
-            .FirstOrDefaultAsync(l => l.StripeCustomerId == invoice.CustomerId && l.IsActive);
+            .Where(l => l.StripeCustomerId == invoice.CustomerId && l.Status != "cancelled")
+            .OrderByDescending(l => l.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (license != null)
         {
             license.Status = "active";
+            license.IsActive = true;
             license.LastPaymentDate = DateTime.UtcNow;
             license.UpdatedAt = DateTime.UtcNow;
             license.PaymentRetryCount = 0;
@@ -219,7 +254,10 @@ public class StripeWebhookController : ControllerBase
             license.GracePeriodEndsAt = null;
 
             if (invoice.PeriodEnd != default)
+            {
+                license.LicenseEndDate = invoice.PeriodEnd;
                 license.ExpiresAt = invoice.PeriodEnd.AddDays(3);
+            }
 
             string? paymentIntentId = null;
             try
@@ -286,7 +324,9 @@ public class StripeWebhookController : ControllerBase
             invoice.Id, invoice.CustomerId);
 
         var license = await _context.TenantLicenses
-            .FirstOrDefaultAsync(l => l.StripeCustomerId == invoice.CustomerId && l.IsActive);
+            .Where(l => l.StripeCustomerId == invoice.CustomerId && l.Status != "cancelled")
+            .OrderByDescending(l => l.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (license != null)
         {
@@ -307,12 +347,13 @@ public class StripeWebhookController : ControllerBase
             if (DateTime.UtcNow < license.GracePeriodEndsAt)
             {
                 license.Status = "past_due";
-                // IsActive remains true - full read+write access
+                license.IsActive = true;
             }
             else
             {
                 // Grace period expired: restrict to read-only (suspended)
                 license.Status = "suspended";
+                license.IsActive = false;
             }
 
             await _context.SaveChangesAsync();
@@ -350,6 +391,7 @@ public class StripeWebhookController : ControllerBase
         {
             license.Status = "cancelled";
             license.IsActive = false;
+            license.AutoRenew = false;
             license.CancelledAt = DateTime.UtcNow;
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -361,6 +403,41 @@ public class StripeWebhookController : ControllerBase
             CancelledAt: DateTime.UtcNow,
             OccurredAt: DateTime.UtcNow
         ));
+    }
+
+    private async Task HandleChargeRefunded(Event stripeEvent)
+    {
+        var charge = stripeEvent.Data.Object as Charge;
+        if (charge == null) return;
+
+        _logger.LogInformation("Charge refunded: {ChargeId}, PaymentIntent: {PaymentIntentId}, Amount refunded: {AmountRefunded}",
+            charge.Id, charge.PaymentIntentId, charge.AmountRefunded / 100m);
+
+        if (string.IsNullOrEmpty(charge.PaymentIntentId))
+        {
+            _logger.LogWarning("charge.refunded: No PaymentIntentId on charge {ChargeId}", charge.Id);
+            return;
+        }
+
+        var invoice = await _context.PaymentInvoices
+            .FirstOrDefaultAsync(i => i.StripePaymentIntentId == charge.PaymentIntentId);
+
+        if (invoice == null)
+        {
+            _logger.LogWarning("charge.refunded: No PaymentInvoice found for PaymentIntent {PaymentIntentId}", charge.PaymentIntentId);
+            return;
+        }
+
+        var isFullRefund = charge.Refunded;
+        invoice.Status = isFullRefund ? "refunded" : "partially_refunded";
+        invoice.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "PaymentInvoice {InvoiceId} updated to {Status} (refunded {AmountRefunded} of {AmountTotal})",
+            invoice.Id, invoice.Status, charge.AmountRefunded / 100m, charge.Amount / 100m);
+
+        _metrics.RecordWebhookProcessed("charge.refunded");
     }
 
     private async Task HandleSubscriptionUpdated(Event stripeEvent)
@@ -387,9 +464,24 @@ public class StripeWebhookController : ControllerBase
             };
 
             license.Status = newStatus;
+            license.IsActive = newStatus is "active" or "past_due" or "trial";
+            license.AutoRenew = !subscription.CancelAtPeriodEnd;
 
-            if (subscription.EndedAt != default)
-                license.ExpiresAt = subscription.EndedAt?.AddDays(3);
+            var currentPeriodEnd = subscription.Items?.Data?.FirstOrDefault()?.CurrentPeriodEnd;
+            if (currentPeriodEnd != default)
+            {
+                license.LicenseEndDate = currentPeriodEnd!.Value;
+                license.ExpiresAt = currentPeriodEnd.Value.AddDays(3);
+            }
+
+            if (newStatus == "cancelled")
+            {
+                license.CancelledAt ??= DateTime.UtcNow;
+            }
+            else
+            {
+                license.CancelledAt = null;
+            }
 
             license.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -414,5 +506,11 @@ public class StripeWebhookController : ControllerBase
             EndedAt: subscription.EndedAt,
             OccurredAt: DateTime.UtcNow
         ));
+    }
+
+    private static bool IsDuplicateProcessedEvent(DbUpdateException exception)
+    {
+        return exception.InnerException is PostgresException postgresException &&
+            postgresException.SqlState == PostgresErrorCodes.UniqueViolation;
     }
 }

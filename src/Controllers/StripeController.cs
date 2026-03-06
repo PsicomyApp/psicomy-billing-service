@@ -85,6 +85,19 @@ public class StripeController : ControllerBase
         if (string.IsNullOrEmpty(tenantId))
             return Unauthorized(new { error = "Tenant ID not found" });
 
+        if (string.IsNullOrWhiteSpace(_stripeOptions.SecretKey))
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Stripe is not configured" });
+
+        if (!string.IsNullOrWhiteSpace(request.Period) &&
+            !string.Equals(request.Period, "monthly", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = "Invalid billing period. Use 'monthly' or 'annual'." });
+        }
+
+        if (request.ExtraSeats is < 0)
+            return BadRequest(new { error = "Extra seats cannot be negative." });
+
         var plan = await _context.PaymentPlans
             .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
 
@@ -99,8 +112,12 @@ public class StripeController : ControllerBase
         if (plan.Tier == "Enterprise")
             return BadRequest(new { error = "Enterprise plan requires contacting sales (contato@psicomy.com.br)" });
 
+        var normalizedPeriod = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase)
+            ? "annual"
+            : "monthly";
+
         // Determine which Stripe Price ID to use
-        var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
+        var isAnnual = normalizedPeriod == "annual";
         var stripePriceId = isAnnual ? plan.StripePriceIdYearly : plan.StripePriceIdMonthly;
 
         if (string.IsNullOrEmpty(stripePriceId))
@@ -111,9 +128,10 @@ public class StripeController : ControllerBase
 
         try
         {
-            var frontendUrl = request.SuccessUrl?.Contains("psicomy") == true
-                ? new Uri(request.SuccessUrl).GetLeftPart(UriPartial.Authority)
-                : "https://psicomy.com.br";
+            var fallbackBaseUri = ResolveBaseRedirectUri(request.SuccessUrl, request.CancelUrl);
+            var successUrl = BuildSafeRedirectUrl(request.SuccessUrl, fallbackBaseUri, "/dashboard?payment=success");
+            var cancelUrl = BuildSafeRedirectUrl(request.CancelUrl, fallbackBaseUri, "/upgrade?payment=cancelled");
+            var extraSeats = request.ExtraSeats ?? 0;
 
             var lineItems = new List<SessionLineItemOptions>
             {
@@ -124,41 +142,55 @@ public class StripeController : ControllerBase
                 }
             };
 
-            // Per-seat addon line item for Team and Business plans
-            if ((plan.ExtraSeatPrice ?? 0) > 0)
+            if (extraSeats > 0)
             {
-                var perSeatPriceId = isAnnual ? plan.StripePriceIdPerSeatYearly : plan.StripePriceIdPerSeat;
-                if (!string.IsNullOrEmpty(perSeatPriceId))
+                // Per-seat addon line item for Team and Business plans.
+                if ((plan.ExtraSeatPrice ?? 0) <= 0)
                 {
-                    var extraSeats = request.ExtraSeats ?? 0;
-                    if (extraSeats > 0)
-                    {
-                        lineItems.Add(new SessionLineItemOptions
-                        {
-                            Price = perSeatPriceId,
-                            Quantity = extraSeats
-                        });
-                    }
+                    return BadRequest(new { error = "Extra seats are not available for this plan." });
                 }
+
+                var perSeatPriceId = isAnnual ? plan.StripePriceIdPerSeatYearly : plan.StripePriceIdPerSeat;
+                if (string.IsNullOrWhiteSpace(perSeatPriceId))
+                {
+                    _logger.LogError("Per-seat Stripe Price ID missing for plan {PlanId} ({PlanTier})", plan.Id, plan.Tier);
+                    return BadRequest(new { error = "Per-seat pricing is not configured for this plan." });
+                }
+
+                lineItems.Add(new SessionLineItemOptions
+                {
+                    Price = perSeatPriceId,
+                    Quantity = extraSeats
+                });
             }
 
             var options = new SessionCreateOptions
             {
                 Mode = "subscription",
-                PaymentMethodTypes = new List<string> { "card", "pix" },
                 LineItems = lineItems,
-                SuccessUrl = request.SuccessUrl ?? $"{frontendUrl}/dashboard?payment=success",
-                CancelUrl = request.CancelUrl ?? $"{frontendUrl}/upgrade?payment=cancelled",
+                SuccessUrl = successUrl,
+                CancelUrl = cancelUrl,
                 Metadata = new Dictionary<string, string>
                 {
                     { "tenant_id", tenantId },
                     { "plan_id", plan.Id.ToString() },
-                    { "period", request.Period ?? "monthly" }
+                    { "period", normalizedPeriod },
+                    { "extra_seats", extraSeats.ToString() }
                 },
                 CustomerEmail = User.FindFirst("email")?.Value,
                 AutomaticTax = new SessionAutomaticTaxOptions { Enabled = true },
                 CustomerCreation = "always",
-                TaxIdCollection = new SessionTaxIdCollectionOptions { Enabled = true }
+                TaxIdCollection = new SessionTaxIdCollectionOptions { Enabled = true },
+                SubscriptionData = new SessionSubscriptionDataOptions
+                {
+                    Metadata = new Dictionary<string, string>
+                    {
+                        { "tenant_id", tenantId },
+                        { "plan_id", plan.Id.ToString() },
+                        { "per_seat_price_monthly", plan.StripePriceIdPerSeat ?? "" },
+                        { "per_seat_price_yearly", plan.StripePriceIdPerSeatYearly ?? "" }
+                    }
+                }
             };
 
             // Stripe Connect: apply application fee and transfer for Business/Enterprise
@@ -166,13 +198,10 @@ public class StripeController : ControllerBase
                 !string.IsNullOrEmpty(_stripeOptions.DestinationId))
             {
                 var feePercent = plan.ConnectFeePercent ?? _stripeOptions.ApplicationFeePercent;
-                options.SubscriptionData = new SessionSubscriptionDataOptions
+                options.SubscriptionData.ApplicationFeePercent = feePercent;
+                options.SubscriptionData.TransferData = new SessionSubscriptionDataTransferDataOptions
                 {
-                    ApplicationFeePercent = feePercent,
-                    TransferData = new SessionSubscriptionDataTransferDataOptions
-                    {
-                        Destination = _stripeOptions.DestinationId
-                    }
+                    Destination = _stripeOptions.DestinationId
                 };
 
                 _logger.LogInformation(
@@ -185,7 +214,7 @@ public class StripeController : ControllerBase
 
             _metrics.RecordCheckoutSessionCreated(plan.Tier);
             _logger.LogInformation("Created checkout session {SessionId} for tenant {TenantId}, plan {PlanId}, period {Period}",
-                session.Id, tenantId, plan.Id, request.Period);
+                session.Id, tenantId, plan.Id, normalizedPeriod);
 
             return Ok(new { sessionId = session.Id, url = session.Url });
         }
@@ -206,18 +235,30 @@ public class StripeController : ControllerBase
         if (string.IsNullOrEmpty(tenantId))
             return Unauthorized(new { error = "Tenant ID not found" });
 
+        if (string.IsNullOrWhiteSpace(_stripeOptions.SecretKey))
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Stripe is not configured" });
+
         var license = await _context.TenantLicenses
-            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+            .Where(l => l.TenantId == tenantId && !string.IsNullOrEmpty(l.StripeCustomerId))
+            .OrderByDescending(l => l.IsActive)
+            .ThenByDescending(l => l.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (license == null || string.IsNullOrEmpty(license.StripeCustomerId))
-            return NotFound(new { error = "No active subscription found" });
+            return NotFound(new { error = "No subscription found" });
 
         try
         {
+            var fallbackBaseUri = ResolveBaseRedirectUri(request.ReturnUrl);
+            var returnUrl = BuildSafeRedirectUrl(
+                request.ReturnUrl,
+                fallbackBaseUri,
+                "/dashboard/settings/billing");
+
             var options = new Stripe.BillingPortal.SessionCreateOptions
             {
                 Customer = license.StripeCustomerId,
-                ReturnUrl = request.ReturnUrl ?? "https://psicomy.com.br/dashboard/settings/billing"
+                ReturnUrl = returnUrl
             };
 
             var service = new Stripe.BillingPortal.SessionService();
@@ -244,10 +285,13 @@ public class StripeController : ControllerBase
 
         var license = await _context.TenantLicenses
             .Include(l => l.Plan)
-            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+            .Where(l => l.TenantId == tenantId)
+            .OrderByDescending(l => l.IsActive)
+            .ThenByDescending(l => l.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (license == null)
-            return NotFound(new { error = "No active subscription found" });
+            return NotFound(new { error = "No subscription found" });
 
         return Ok(new
         {
@@ -546,6 +590,68 @@ public class StripeController : ControllerBase
             _logger.LogError(ex, "Error reactivating subscription for tenant {TenantId}", tenantId);
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    private Uri ResolveBaseRedirectUri(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (TryValidateRedirectUrl(candidate, out var validatedUri))
+            {
+                return new Uri(validatedUri.GetLeftPart(UriPartial.Authority));
+            }
+        }
+
+        if (TryValidateRedirectUrl(_stripeOptions.DefaultFrontendUrl, out var configuredDefaultUri))
+        {
+            return new Uri(configuredDefaultUri.GetLeftPart(UriPartial.Authority));
+        }
+
+        return new Uri("https://psicomy.com.br");
+    }
+
+    private string BuildSafeRedirectUrl(string? candidateUrl, Uri fallbackBaseUri, string fallbackPath)
+    {
+        if (TryValidateRedirectUrl(candidateUrl, out var validatedUri))
+        {
+            return validatedUri.ToString();
+        }
+
+        return new Uri(fallbackBaseUri, fallbackPath).ToString();
+    }
+
+    private bool TryValidateRedirectUrl(string? candidateUrl, out Uri validatedUri)
+    {
+        validatedUri = null!;
+
+        if (string.IsNullOrWhiteSpace(candidateUrl) ||
+            !Uri.TryCreate(candidateUrl, UriKind.Absolute, out var parsedUri))
+        {
+            return false;
+        }
+
+        var isHttps = parsedUri.Scheme == Uri.UriSchemeHttps;
+        var isLocalHttp = parsedUri.Scheme == Uri.UriSchemeHttp &&
+            (string.Equals(parsedUri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(parsedUri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase));
+
+        if (!isHttps && !isLocalHttp)
+        {
+            return false;
+        }
+
+        var isAllowedHost = (_stripeOptions.AllowedRedirectHosts ?? [])
+            .Any(host =>
+                string.Equals(host, parsedUri.Host, StringComparison.OrdinalIgnoreCase) ||
+                (host.StartsWith('.') && parsedUri.Host.EndsWith(host, StringComparison.OrdinalIgnoreCase)));
+
+        if (!isAllowedHost)
+        {
+            return false;
+        }
+
+        validatedUri = parsedUri;
+        return true;
     }
 
     private async Task<IActionResult> ActivateFreePlan(string tenantId, Guid planId)

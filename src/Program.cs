@@ -83,12 +83,13 @@ try
     {
         options.AddPolicy("AllowFrontend", policy =>
         {
-            policy.WithOrigins(
+                policy.WithOrigins(
                     "http://localhost:5173",
-                    "http://1.2.7.0.0.1:5173",
+                    "http://127.0.0.1:5173",
                     "https://psicomy.com.br",
                     "https://www.psicomy.com.br",
                     "https://app.psicomy.com",
+                    "https://app.psicomy.com.br",
                     "https://signoz.psicomy.com.br")
                 .AllowAnyMethod()
                 .AllowAnyHeader()
