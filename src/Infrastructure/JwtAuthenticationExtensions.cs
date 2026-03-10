@@ -35,7 +35,7 @@ public static class JwtAuthenticationExtensions
             {
                 OnMessageReceived = context =>
                 {
-                    if (context.Request.Cookies.TryGetValue("psicomy.access_token", out var token))
+                    if (context.Request.Cookies.TryGetValue("access_token", out var token))
                     {
                         context.Token = token;
                     }
