@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Psicomy.Services.Billing.Models;
 
 namespace Psicomy.Services.Billing.Data;
@@ -16,13 +15,6 @@ public class BillingDbContext : DbContext
     public DbSet<AcademicVerification> AcademicVerifications => Set<AcademicVerification>();
     public DbSet<ProcessedStripeEvent> ProcessedStripeEvents => Set<ProcessedStripeEvent>();
     public DbSet<SentTrialReminder> SentTrialReminders => Set<SentTrialReminder>();
-
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        base.OnConfiguring(optionsBuilder);
-        optionsBuilder.ConfigureWarnings(w =>
-            w.Ignore(RelationalEventId.PendingModelChangesWarning));
-    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -45,6 +37,7 @@ public class BillingDbContext : DbContext
             builder.HasIndex(e => e.StripeSubscriptionId);
             builder.HasIndex(e => new { e.TenantId, e.IsActive });
 
+            builder.Property(e => e.HasUsedPaidTrialExtension).HasDefaultValue(false);
             builder.Property(e => e.LastPaymentError).HasMaxLength(500);
 
             builder.HasOne(e => e.Plan)
