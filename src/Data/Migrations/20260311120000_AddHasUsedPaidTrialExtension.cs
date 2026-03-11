@@ -10,12 +10,20 @@ namespace Psicomy.Services.Billing.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<bool>(
-                name: "HasUsedPaidTrialExtension",
-                table: "TenantLicenses",
-                type: "boolean",
-                nullable: false,
-                defaultValue: false);
+            // Idempotent: column may already exist from a previous partial migration attempt
+            migrationBuilder.Sql("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'TenantLicenses'
+                        AND column_name = 'HasUsedPaidTrialExtension'
+                    ) THEN
+                        ALTER TABLE "TenantLicenses"
+                        ADD COLUMN "HasUsedPaidTrialExtension" boolean NOT NULL DEFAULT false;
+                    END IF;
+                END $$;
+                """);
         }
 
         /// <inheritdoc />
