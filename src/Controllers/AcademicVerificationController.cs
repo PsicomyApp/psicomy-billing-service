@@ -342,33 +342,46 @@ public class AcademicVerificationController : ControllerBase
         }
 
         var existingLicense = await _context.TenantLicenses
-            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.IsActive);
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId);
 
         if (existingLicense != null)
         {
+            // Extend trial to 180 days from original signup date
+            var extendedTrialEnd = existingLicense.LicenseStartDate.AddDays(180);
             existingLicense.PlanId = freePlan.Id;
+            existingLicense.TrialEndDate = extendedTrialEnd;
+            existingLicense.LicenseEndDate = extendedTrialEnd;
+            existingLicense.ExpiresAt = extendedTrialEnd;
+            existingLicense.Status = "trial";
+            existingLicense.IsActive = true;
+            existingLicense.PaymentMethod = "academic_verification";
             existingLicense.UpdatedAt = DateTime.UtcNow;
         }
         else
         {
+            var now = DateTime.UtcNow;
+            var extendedTrialEnd = now.AddDays(180);
             var license = new TenantLicense
             {
                 Id = Guid.NewGuid(),
                 TenantId = tenantId,
                 PlanId = freePlan.Id,
-                Status = "active",
+                Status = "trial",
                 IsActive = true,
-                LicenseStartDate = DateTime.UtcNow,
-                LicenseEndDate = DateTime.UtcNow.AddYears(1),
-                ExpiresAt = DateTime.UtcNow.AddYears(1),
+                LicenseStartDate = now,
+                LicenseEndDate = extendedTrialEnd,
+                TrialEndDate = extendedTrialEnd,
+                ExpiresAt = extendedTrialEnd,
                 PaymentMethod = "academic_verification",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                CreatedAt = now,
+                UpdatedAt = now
             };
             _context.TenantLicenses.Add(license);
         }
 
-        _logger.LogInformation("Free plan activated via academic verification for tenant {TenantId}", tenantId);
+        _logger.LogInformation(
+            "Student trial extended to 180 days via academic verification for tenant {TenantId}",
+            tenantId);
     }
 }
 

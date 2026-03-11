@@ -428,6 +428,11 @@ namespace Psicomy.Services.Billing.Data.Migrations
                     b.Property<DateTime?>("GracePeriodEndsAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("HasUsedPaidTrialExtension")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 

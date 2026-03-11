@@ -29,6 +29,12 @@ public class TenantLicense
     public string? LastPaymentError { get; set; }
     public DateTime? GracePeriodEndsAt { get; set; }
 
+    /// <summary>
+    /// Tracks whether this tenant has already used their one-time paid plan trial extension.
+    /// Once true, no further trial extensions are available.
+    /// </summary>
+    public bool HasUsedPaidTrialExtension { get; set; } = false;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

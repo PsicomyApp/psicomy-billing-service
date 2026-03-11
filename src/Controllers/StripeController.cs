@@ -592,6 +592,132 @@ public class StripeController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Checks if the current tenant is eligible for a one-time paid plan trial extension.
+    /// Eligible when: free trial expired, not a verified student, never used this option before.
+    /// </summary>
+    [HttpGet("trial-extension-eligible")]
+    public async Task<IActionResult> CheckTrialExtensionEligible()
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        var license = await _context.TenantLicenses
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId);
+
+        if (license == null)
+            return Ok(new { eligible = false, reason = "no_license" });
+
+        if (license.HasUsedPaidTrialExtension)
+            return Ok(new { eligible = false, reason = "already_used" });
+
+        if (license.Status == "active" && license.IsActive)
+            return Ok(new { eligible = false, reason = "already_active" });
+
+        // Verified students get 180 days, not this extension
+        var hasApprovedVerification = await _context.AcademicVerifications
+            .AnyAsync(v => v.TenantId == tenantId && v.Status == "approved");
+
+        if (hasApprovedVerification)
+            return Ok(new { eligible = false, reason = "student_verified" });
+
+        return Ok(new { eligible = true });
+    }
+
+    /// <summary>
+    /// Creates a Stripe checkout session for paid plan with 15-day trial extension.
+    /// Only available once per tenant (one-time extension).
+    /// </summary>
+    [HttpPost("create-trial-extension-checkout")]
+    public async Task<IActionResult> CreateTrialExtensionCheckout([FromBody] TrialExtensionRequest request)
+    {
+        var tenantId = HttpContext.GetTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+            return Unauthorized(new { error = "Tenant ID not found" });
+
+        if (string.IsNullOrWhiteSpace(_stripeOptions.SecretKey))
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Stripe is not configured" });
+
+        var license = await _context.TenantLicenses
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId);
+
+        if (license == null || license.HasUsedPaidTrialExtension)
+            return BadRequest(new { error = "Not eligible for trial extension" });
+
+        var plan = await _context.PaymentPlans
+            .FirstOrDefaultAsync(p => p.Id == request.PlanId && p.IsActive);
+
+        if (plan == null || plan.MonthlyPrice == 0)
+            return BadRequest(new { error = "Invalid plan for trial extension" });
+
+        var isAnnual = string.Equals(request.Period, "annual", StringComparison.OrdinalIgnoreCase);
+        var priceId = isAnnual ? plan.StripePriceIdYearly : plan.StripePriceIdMonthly;
+
+        if (string.IsNullOrEmpty(priceId))
+            return BadRequest(new { error = "Plan pricing not configured" });
+
+        try
+        {
+            var fallbackBaseUri = ResolveBaseRedirectUri(request.SuccessUrl, request.CancelUrl);
+            var successUrl = BuildSafeRedirectUrl(request.SuccessUrl, fallbackBaseUri, "/dashboard/settings/billing?checkout=success");
+            var cancelUrl = BuildSafeRedirectUrl(request.CancelUrl, fallbackBaseUri, "/dashboard/settings/billing?checkout=cancelled");
+
+            var options = new SessionCreateOptions
+            {
+                Mode = "subscription",
+                LineItems = new List<SessionLineItemOptions>
+                {
+                    new() { Price = priceId, Quantity = 1 }
+                },
+                SubscriptionData = new SessionSubscriptionDataOptions
+                {
+                    TrialPeriodDays = 15,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        { "tenant_id", tenantId },
+                        { "plan_id", request.PlanId.ToString() },
+                        { "is_trial_extension", "true" }
+                    }
+                },
+                SuccessUrl = successUrl,
+                CancelUrl = cancelUrl,
+                CustomerEmail = User.FindFirst("email")?.Value,
+                AutomaticTax = new SessionAutomaticTaxOptions { Enabled = true },
+                CustomerCreation = "always",
+                TaxIdCollection = new SessionTaxIdCollectionOptions { Enabled = true }
+            };
+
+            // Use existing Stripe customer if available
+            if (!string.IsNullOrEmpty(license.StripeCustomerId))
+            {
+                options.Customer = license.StripeCustomerId;
+                options.CustomerEmail = null;
+                options.CustomerCreation = null;
+            }
+
+            var service = new SessionService();
+            var session = await service.CreateAsync(options);
+
+            // Mark extension as used
+            license.HasUsedPaidTrialExtension = true;
+            license.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            _metrics.RecordCheckoutSessionCreated("trial_extension");
+            _logger.LogInformation(
+                "Created trial extension checkout {SessionId} for tenant {TenantId}, plan {PlanId}",
+                session.Id, tenantId, request.PlanId);
+
+            return Ok(new { sessionId = session.Id, url = session.Url });
+        }
+        catch (StripeException ex)
+        {
+            _logger.LogError(ex, "Error creating trial extension checkout for tenant {TenantId}", tenantId);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     private Uri ResolveBaseRedirectUri(params string?[] candidates)
     {
         foreach (var candidate in candidates)
@@ -710,3 +836,4 @@ public record CreateCheckoutSessionRequest(
 );
 public record CreatePortalSessionRequest(string? ReturnUrl = null);
 public record PlanChangeRequest(Guid PlanId, string? Period = "monthly");
+public record TrialExtensionRequest(Guid PlanId, string? Period = "monthly", string? SuccessUrl = null, string? CancelUrl = null);

@@ -110,6 +110,10 @@ public class StripeWebhookController : ControllerBase
                         await HandleChargeRefunded(stripeEvent);
                         break;
 
+                    case "customer.subscription.trial_will_end":
+                        await HandleTrialWillEnd(stripeEvent);
+                        break;
+
                     default:
                         _logger.LogInformation("Unhandled Stripe event type: {EventType}", stripeEvent.Type);
                         break;
@@ -506,6 +510,37 @@ public class StripeWebhookController : ControllerBase
             EndedAt: subscription.EndedAt,
             OccurredAt: DateTime.UtcNow
         ));
+    }
+
+    private async Task HandleTrialWillEnd(Event stripeEvent)
+    {
+        var subscription = stripeEvent.Data.Object as Subscription;
+        if (subscription == null) return;
+
+        _logger.LogInformation("Trial ending soon for subscription: {SubscriptionId}", subscription.Id);
+
+        var license = await _context.TenantLicenses
+            .FirstOrDefaultAsync(l => l.StripeSubscriptionId == subscription.Id);
+
+        if (license == null) return;
+
+        var daysRemaining = subscription.TrialEnd.HasValue
+            ? (int)(subscription.TrialEnd.Value - DateTime.UtcNow).TotalDays
+            : 0;
+
+        await _bus.Publish(new TrialEndingEvent(
+            TenantId: license.TenantId,
+            TrialEndsAt: subscription.TrialEnd ?? DateTime.UtcNow,
+            PlanTier: license.Plan?.Tier ?? "Free",
+            PlanPrice: 0,
+            DaysRemaining: Math.Max(daysRemaining, 0),
+            HasPaymentMethod: subscription.DefaultPaymentMethod != null,
+            OccurredAt: DateTime.UtcNow
+        ));
+
+        _logger.LogInformation(
+            "[Webhook] Trial ending in {Days} days for tenant {Tenant}",
+            daysRemaining, license.TenantId);
     }
 
     private static bool IsDuplicateProcessedEvent(DbUpdateException exception)
