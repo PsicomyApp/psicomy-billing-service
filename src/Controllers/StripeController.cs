@@ -672,7 +672,7 @@ public class StripeController : ControllerBase
                 },
                 SubscriptionData = new SessionSubscriptionDataOptions
                 {
-                    TrialPeriodDays = 15,
+                    TrialPeriodDays = 14,
                     Metadata = new Dictionary<string, string>
                     {
                         { "tenant_id", tenantId },
